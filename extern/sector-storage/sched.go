@@ -2,16 +2,15 @@ package sectorstorage
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"sort"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-	"golang.org/x/xerrors"
-
 	"github.com/filecoin-project/go-state-types/abi"
 	"github.com/filecoin-project/specs-storage/storage"
+	"github.com/google/uuid"
 
 	"github.com/filecoin-project/lotus/extern/sector-storage/sealtasks"
 	"github.com/filecoin-project/lotus/extern/sector-storage/storiface"
@@ -165,6 +164,157 @@ func newScheduler() *scheduler {
 	}
 }
 
+type WorkerPower struct {
+	Hostname       string
+	CurrentSectors int
+	MaxSectors     int
+}
+
+var schedulerLock sync.Mutex
+var sectorInWorker map[abi.SectorNumber]string = make(map[abi.SectorNumber]string, 64)
+
+func WorkerJobs() {
+	var sectorList []int
+
+	for sectorNumber, _ := range sectorInWorker {
+		sectorList = append(sectorList, int(sectorNumber))
+	}
+
+	sort.Ints(sectorList)
+
+	for idx := range sectorList {
+		sectorNumber := sectorList[idx]
+		log.Debugf("^^^^^^^^ 扇区: %d  ->  Worker: [%s]\n", sectorNumber,
+			sectorInWorker[abi.SectorNumber(sectorNumber)])
+	}
+}
+
+var SealingWorkers []*WorkerPower
+
+func init() {
+	IntWorerList()
+}
+
+func IntWorerList() {
+	SealingWorkers = append(SealingWorkers, &WorkerPower{
+		"miner-node-1", 0, 8,
+	})
+	SealingWorkers = append(SealingWorkers, &WorkerPower{
+		"worker-node-1", 0, 8,
+	})
+}
+
+type ByWorkerCurrentSectors []*WorkerPower
+
+func (a ByWorkerCurrentSectors) Len() int           { return len(a) }
+func (a ByWorkerCurrentSectors) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByWorkerCurrentSectors) Less(i, j int) bool { return a[i].CurrentSectors < a[j].CurrentSectors }
+
+func (sh *scheduler) getBestWorker(sector storage.SectorRef, taskType sealtasks.TaskType) (string, error) {
+	schedulerLock.Lock()
+	defer schedulerLock.Unlock()
+
+	WorkerJobs()
+
+	// 检查扇区任务是否被调度过
+	if workerHostname, ok := sectorInWorker[sector.ID.Number]; ok {
+		// 这个扇区之前的任务被调度到这台worker，那就它接下来的任务，也调度到这个worker.
+		log.Debugf("^^^^^^^^ 发现扇区 [%d] 在 Worker [%v] 上做过任务，继续选择该Worker执行 任务类型 [%v]。\n",
+			sector.ID.Number, workerHostname, taskType)
+		return workerHostname, nil
+	} else {
+		// 扇区没有被调度过，寻找合适的worker
+		// 寻找worker列表中，当前sectors最小的那台worker，把任务分配给它
+
+		log.Debugf("^^^^^^^^ 扇区 [%d] 从未调度过，开始调度。\n", sector.ID.Number)
+		log.Debug("^^^^^^^^ 排序前的列表: ", SealingWorkers[0], SealingWorkers[1])
+		sort.Sort(ByWorkerCurrentSectors(SealingWorkers))
+		minSectorWorker := SealingWorkers[0]
+
+		log.Debug("^^^^^^^^ 排序后的列表: ", SealingWorkers[0], SealingWorkers[1])
+
+		// 如果已经超过最大允许的并发扇区数量，就报错
+		if minSectorWorker.CurrentSectors == minSectorWorker.MaxSectors {
+			log.Debugf("^^^^^^^^ 发现 Worker [%v] 的任务数量已经达到最大，无法调度。\n", minSectorWorker.Hostname)
+			return "", fmt.Errorf("^^^^^^^^ Scheduler reached worker MaxSectors, worker [%v]\n", minSectorWorker.Hostname)
+		}
+
+		minSectorWorker.CurrentSectors += 1
+		sectorInWorker[sector.ID.Number] = minSectorWorker.Hostname
+
+		return minSectorWorker.Hostname, nil
+	}
+
+	return "", fmt.Errorf("^^^^^^^^ !!! 调度器无法找到合适worker !!!\n")
+}
+
+func (sh *scheduler) Schedule(ctx context.Context, sector storage.SectorRef, taskType sealtasks.TaskType,
+	sel WorkerSelector, prepare WorkerAction, work WorkerAction) error {
+	ret := make(chan workerResponse)
+
+	bestWorkerName, err := sh.getBestWorker(sector, taskType)
+	log.Debugf("^^^^^^^^ 调度器：获取到最优的Worker: [%v]\n", bestWorkerName)
+	if err != nil {
+		return err
+	}
+
+	var workerID WorkerID
+	var Worker *workerHandle
+
+	for {
+		sh.workersLk.Lock()
+		for wid, w := range sh.workers {
+			log.Debugf("^^^^^^^^ 调度器：打印所有worker: [%v], [%v]\n", wid, w.info.Hostname)
+			if w.info.Hostname == bestWorkerName {
+				Worker = w
+				sh.workersLk.Unlock()
+				log.Debugf("^^^^^^^^ 调度器：最优Worker [%v]　在线!\n", w.info.Hostname)
+				goto Run
+			}
+		}
+
+		sh.workersLk.Unlock()
+		if Worker == nil {
+			log.Debugf("^^^^^^^^ 调度器：最优Worker [%v]　离线，等待Worker上线!\n", bestWorkerName)
+			time.Sleep(time.Second * 5)
+		}
+	}
+
+Run:
+
+	log.Debugf("^^^^^^^^ 调度器：扇区 [%v] 任务类型 [%v] 已经调度到 Worker [%v]上执行。\n",
+		sector.ID.Number, taskType, Worker.info.Hostname)
+
+	workFunc := func(ret chan workerResponse) {
+		err := prepare(context.TODO(), sh.workTracker.worker(workerID, Worker.workerRpc))
+		if err != nil {
+			log.Errorf("^^^^^^^^ Scheduler: prepare sector: [%] type: [%v] on worker [%v] faield: [%v]\n",
+				sector.ID, taskType, Worker.info.Hostname, err)
+			ret <- workerResponse{err: err}
+		}
+
+		err = work(context.TODO(), sh.workTracker.worker(workerID, Worker.workerRpc))
+		if err != nil {
+			log.Errorf("^^^^^^^^ Scheduler: work sector: [%] type: [%v] on worker [%v] faield: [%v]\n",
+				sector.ID, taskType, Worker.info.Hostname, err)
+		}
+
+		ret <- workerResponse{err: err}
+	}
+
+	log.Debugf("^^^^^^^^ Schedule Worker[%v] for sector[%v]\n", Worker.info.Hostname, sector)
+
+	go workFunc(ret)
+
+	select {
+	case resp := <-ret:
+		return resp.err
+	}
+
+	return nil
+}
+
+/*
 func (sh *scheduler) Schedule(ctx context.Context, sector storage.SectorRef, taskType sealtasks.TaskType, sel WorkerSelector, prepare WorkerAction, work WorkerAction) error {
 	ret := make(chan workerResponse)
 
@@ -198,6 +348,7 @@ func (sh *scheduler) Schedule(ctx context.Context, sector storage.SectorRef, tas
 		return ctx.Err()
 	}
 }
+*/
 
 func (r *workerRequest) respond(err error) {
 	select {
