@@ -217,7 +217,7 @@ func (sh *scheduler) getBestWorker(sector storage.SectorRef, taskType sealtasks.
 	WorkerJobs()
 
 	if taskType == sealtasks.TTFetch {
-		return SealingWorkers[0].Hostname, nil
+		return "miner-node-1", nil
 	}
 
 	// 检查扇区任务是否被调度过
