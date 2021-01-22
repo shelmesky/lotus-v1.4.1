@@ -216,6 +216,10 @@ func (sh *scheduler) getBestWorker(sector storage.SectorRef, taskType sealtasks.
 
 	WorkerJobs()
 
+	if taskType == sealtasks.TTFetch {
+		return SealingWorkers[0].Hostname, nil
+	}
+
 	// 检查扇区任务是否被调度过
 	if workerHostname, ok := sectorInWorker[sector.ID.Number]; ok {
 		// 这个扇区之前的任务被调度到这台worker，那就它接下来的任务，也调度到这个worker.
@@ -225,10 +229,6 @@ func (sh *scheduler) getBestWorker(sector storage.SectorRef, taskType sealtasks.
 	} else {
 		// 扇区没有被调度过，寻找合适的worker
 		// 寻找worker列表中，当前sectors最小的那台worker，把任务分配给它
-
-		if taskType == sealtasks.TTFetch {
-			return SealingWorkers[0].Hostname, nil
-		}
 
 		log.Debugf("^^^^^^^^ 扇区 [%d] 从未调度过，开始调度。\n", sector.ID.Number)
 		log.Debug("^^^^^^^^ 排序前的列表: ", SealingWorkers[0], SealingWorkers[1])
