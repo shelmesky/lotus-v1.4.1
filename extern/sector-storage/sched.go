@@ -226,6 +226,10 @@ func (sh *scheduler) getBestWorker(sector storage.SectorRef, taskType sealtasks.
 		// 扇区没有被调度过，寻找合适的worker
 		// 寻找worker列表中，当前sectors最小的那台worker，把任务分配给它
 
+		if taskType == sealtasks.TTFetch {
+			return SealingWorkers[0].Hostname, nil
+		}
+
 		log.Debugf("^^^^^^^^ 扇区 [%d] 从未调度过，开始调度。\n", sector.ID.Number)
 		log.Debug("^^^^^^^^ 排序前的列表: ", SealingWorkers[0], SealingWorkers[1])
 		sort.Sort(ByWorkerCurrentSectors(SealingWorkers))
