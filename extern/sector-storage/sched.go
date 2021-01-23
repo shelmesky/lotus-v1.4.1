@@ -202,6 +202,9 @@ func IntWorerList() {
 	SealingWorkers = append(SealingWorkers, &WorkerPower{
 		"worker-node-1", 0, 8,
 	})
+	SealingWorkers = append(SealingWorkers, &WorkerPower{
+		"worker-node-2", 0, 8,
+	})
 }
 
 type ByWorkerCurrentSectors []*WorkerPower
