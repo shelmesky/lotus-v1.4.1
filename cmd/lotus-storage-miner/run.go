@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	sectorstorage "github.com/filecoin-project/lotus/extern/sector-storage"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -54,6 +55,11 @@ var runCmd = &cli.Command{
 			Usage: "manage open file limit",
 			Value: true,
 		},
+		&cli.StringFlag{
+			Name:	"hostname",
+			Usage: "hostname for worker",
+			Value: "",
+		},
 	},
 	Action: func(cctx *cli.Context) error {
 		if !cctx.Bool("enable-gpu-proving") {
@@ -81,6 +87,8 @@ var runCmd = &cli.Command{
 		if err != nil {
 			return err
 		}
+
+		sectorstorage.WorkerHostname = cctx.String("hostname")
 
 		if cctx.Bool("manage-fdlimit") {
 			if _, _, err := ulimit.ManageFdLimit(); err != nil {

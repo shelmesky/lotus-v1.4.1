@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"os"
 	"reflect"
 	"runtime"
 	"sync"
@@ -29,6 +28,8 @@ import (
 )
 
 var pathTypes = []storiface.SectorFileType{storiface.FTUnsealed, storiface.FTSealed, storiface.FTCache}
+
+var WorkerHostname string
 
 type WorkerConfig struct {
 	TaskTypes []sealtasks.TaskType
@@ -485,10 +486,11 @@ func (l *LocalWorker) Paths(ctx context.Context) ([]stores.StoragePath, error) {
 }
 
 func (l *LocalWorker) Info(context.Context) (storiface.WorkerInfo, error) {
-	hostname, err := os.Hostname() // TODO: allow overriding from config
-	if err != nil {
-		panic(err)
-	}
+	//hostname, err := os.Hostname() // TODO: allow overriding from config
+	//if err != nil {
+	//	panic(err)
+	//}
+	hostname := WorkerHostname
 
 	gpus, err := ffi.GetGPUDevices()
 	if err != nil {
