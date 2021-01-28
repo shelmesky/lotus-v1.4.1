@@ -2,7 +2,9 @@ package sectorstorage
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"golang.org/x/xerrors"
 	"math/rand"
 	"sort"
 	"sync"
@@ -164,161 +166,454 @@ func newScheduler() *scheduler {
 	}
 }
 
-type WorkerPower struct {
-	Hostname       string
-	CurrentSectors int
-	MaxSectors     int
+// 扇区任务请求
+type SectorRequest struct {
+	Sector   storage.SectorRef
+	TaskType sealtasks.TaskType
+	Selector WorkerSelector
+	Prepare  WorkerAction
+	Work     WorkerAction
+	RetChan  chan workerResponse
 }
 
-var schedulerLock sync.Mutex
-var sectorInWorker map[abi.SectorNumber]string = make(map[abi.SectorNumber]string, 64)
+// 按照Value字段排序
+type SortStruct struct {
+	Hostname string
+	Value    int
+}
 
-func WorkerJobs() {
-	var sectorList []int
+type ByValue []SortStruct
 
-	for sectorNumber, _ := range sectorInWorker {
-		sectorList = append(sectorList, int(sectorNumber))
+func (a ByValue) Len() int           { return len(a) }
+func (a ByValue) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByValue) Less(i, j int) bool { return a[i].Value < a[j].Value }
+
+var ErrorNoAvaiableWorker = errors.New("Can not find any worker.")
+
+var taskTypeList []sealtasks.TaskType = []sealtasks.TaskType{
+	sealtasks.TTAddPiece,
+	sealtasks.TTPreCommit1,
+	sealtasks.TTPreCommit2,
+	sealtasks.TTCommit1,
+	sealtasks.TTCommit2,
+	sealtasks.TTFinalize,
+	sealtasks.TTFetch,
+	sealtasks.TTReadUnsealed,
+	sealtasks.TTUnseal,
+}
+
+// 定义worker的任务相关属性
+type WorkerTaskSpecs struct {
+	Hostname        string
+	CurrentAP       int
+	MaxAP           int
+	CurrentPC1      int
+	MaxPC1          int
+	CurrentPC2      int
+	MaxPC2          int
+	CurrentC1       int
+	MaxC1           int
+	CurrentC2       int
+	MaxC2           int
+	CurrentFinalize int
+	MaxFinalize     int
+	RequestSignal   chan *SectorRequest                        // 接收任务的队列
+	RequestQueueMap map[sealtasks.TaskType]chan *SectorRequest // 每种任务类型对应的队列
+	StopChan        chan bool                                  // 接收停止信号的channel
+	Locker          *sync.Mutex                                // 互斥锁
+	Scheduler       *scheduler                                 // 全局调度器
+}
+
+func NewWorkerTaskSpeec(sh *scheduler, hostname string, maxAP, maxPC1, maxPC2, maxC1, maxC2, maxFinal int) *WorkerTaskSpecs {
+	var workerSpece WorkerTaskSpecs
+
+	workerSpece.Locker = new(sync.Mutex)
+
+	workerSpece.Hostname = hostname
+	workerSpece.MaxAP = maxAP
+	workerSpece.MaxPC1 = maxPC1
+	workerSpece.MaxPC2 = maxPC2
+	workerSpece.MaxC1 = maxC1
+	workerSpece.MaxC2 = maxC2
+	workerSpece.MaxFinalize = maxFinal
+
+	workerSpece.RequestSignal = make(chan *SectorRequest, 512)
+
+	workerSpece.RequestQueueMap = make(map[sealtasks.TaskType]chan *SectorRequest, 16)
+
+	for i := 0; i < len(taskTypeList); i++ {
+		taskType := taskTypeList[i]
+		workerSpece.RequestQueueMap[taskType] = make(chan *SectorRequest, 512)
 	}
 
-	sort.Ints(sectorList)
+	workerSpece.StopChan = make(chan bool)
+	workerSpece.Scheduler = sh
 
-	for idx := range sectorList {
-		sectorNumber := sectorList[idx]
-		log.Debugf("^^^^^^^^ 扇区: %d  ->  Worker: [%s]\n", sectorNumber,
-			sectorInWorker[abi.SectorNumber(sectorNumber)])
-	}
+	go workerSpece.runWorkerTaskLoop()
+
+	return &workerSpece
 }
 
-var SealingWorkers []*WorkerPower
-
-func init() {
-	IntWorerList()
-}
-
-func IntWorerList() {
-	SealingWorkers = append(SealingWorkers, &WorkerPower{
-		"miner-node-1", 0, 8,
-	})
-	SealingWorkers = append(SealingWorkers, &WorkerPower{
-		"worker-node-1", 0, 8,
-	})
-	SealingWorkers = append(SealingWorkers, &WorkerPower{
-		"worker-node-2", 0, 8,
-	})
-}
-
-type ByWorkerCurrentSectors []*WorkerPower
-
-func (a ByWorkerCurrentSectors) Len() int           { return len(a) }
-func (a ByWorkerCurrentSectors) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a ByWorkerCurrentSectors) Less(i, j int) bool { return a[i].CurrentSectors < a[j].CurrentSectors }
-
-func (sh *scheduler) getBestWorker(sector storage.SectorRef, taskType sealtasks.TaskType) (string, error) {
-	schedulerLock.Lock()
-	defer schedulerLock.Unlock()
-
-	WorkerJobs()
-
-	if taskType == sealtasks.TTFetch {
-		return "miner-node-1", nil
-	}
-
-	// 检查扇区任务是否被调度过
-	if workerHostname, ok := sectorInWorker[sector.ID.Number]; ok {
-		// 这个扇区之前的任务被调度到这台worker，那就它接下来的任务，也调度到这个worker.
-		log.Debugf("^^^^^^^^ 发现扇区 [%d] 在 Worker [%v] 上做过任务，继续选择该Worker执行 任务类型 [%v]。\n",
-			sector.ID.Number, workerHostname, taskType)
-		return workerHostname, nil
-	} else {
-		// 扇区没有被调度过，寻找合适的worker
-		// 寻找worker列表中，当前sectors最小的那台worker，把任务分配给它
-
-		log.Debugf("^^^^^^^^ 扇区 [%d] 从未调度过，开始调度。\n", sector.ID.Number)
-		log.Debug("^^^^^^^^ 排序前的列表: ", SealingWorkers[0], SealingWorkers[1])
-		sort.Sort(ByWorkerCurrentSectors(SealingWorkers))
-		minSectorWorker := SealingWorkers[0]
-
-		log.Debug("^^^^^^^^ 排序后的列表: ", SealingWorkers[0], SealingWorkers[1])
-
-		// 如果已经超过最大允许的并发扇区数量，就报错
-		if minSectorWorker.CurrentSectors == minSectorWorker.MaxSectors {
-			log.Debugf("^^^^^^^^ 发现 Worker [%v] 的任务数量已经达到最大，无法调度。\n", minSectorWorker.Hostname)
-			return "", fmt.Errorf("^^^^^^^^ Scheduler reached worker MaxSectors, worker [%v]\n", minSectorWorker.Hostname)
+func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
+	log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始运行...", workerSpec.Hostname)
+	for {
+		select {
+		case req := <-workerSpec.RequestSignal:
+			workerSpec.RequestQueueMap[req.TaskType] <- req
+			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 获取到任务 [%v]\n", workerSpec.Hostname, DumpRequest(req))
+		case <-workerSpec.StopChan:
+			log.Warnf("Worker: [%v] runWorkerTaskLoop() 退出!\n", workerSpec.Hostname)
+			return
+		case <-time.After(3000 * time.Millisecond):
+			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 定时器到期...", workerSpec.Hostname)
 		}
 
-		minSectorWorker.CurrentSectors += 1
-		sectorInWorker[sector.ID.Number] = minSectorWorker.Hostname
+		workerSpec.Locker.Lock()
 
-		return minSectorWorker.Hostname, nil
+		var req *SectorRequest
+
+		// AddPiece
+		if workerSpec.CurrentAP < workerSpec.MaxAP {
+			queue := workerSpec.RequestQueueMap[sealtasks.TTAddPiece]
+			if len(queue) > 0 {
+				req = <-queue
+				go workerSpec.runTask(req)
+				workerSpec.CurrentAP += 1
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n", workerSpec.Hostname, DumpRequest(req))
+			}
+		} else {
+			log.Warnf("^^^^^^^^ !!! AddPiece 超过最大数量: [%v > %v] !!!\n", workerSpec.CurrentAP, workerSpec.MaxAP)
+		}
+
+		// PreCommit1
+		if workerSpec.CurrentPC1 < workerSpec.MaxPC1 {
+			queue := workerSpec.RequestQueueMap[sealtasks.TTPreCommit1]
+			if len(queue) > 0 {
+				req = <-queue
+				go workerSpec.runTask(req)
+				workerSpec.CurrentPC1 += 1
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
+					workerSpec.Hostname, DumpRequest(req))
+			}
+		}
+
+		// PreCommit2
+		if workerSpec.CurrentPC2 < workerSpec.MaxPC2 {
+			queue := workerSpec.RequestQueueMap[sealtasks.TTPreCommit2]
+			if len(queue) > 0 {
+				req = <-queue
+				go workerSpec.runTask(req)
+				workerSpec.CurrentPC2 += 1
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
+					workerSpec.Hostname, DumpRequest(req))
+			}
+		}
+
+		// Commit1
+		if workerSpec.CurrentC1 < workerSpec.MaxC1 {
+			queue := workerSpec.RequestQueueMap[sealtasks.TTCommit1]
+			if len(queue) > 0 {
+				req = <-queue
+				go workerSpec.runTask(req)
+				workerSpec.CurrentC1 += 1
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
+					workerSpec.Hostname, DumpRequest(req))
+			}
+		}
+
+		// Commit2
+		if workerSpec.CurrentC2 < workerSpec.MaxC2 {
+			queue := workerSpec.RequestQueueMap[sealtasks.TTCommit2]
+			if len(queue) > 0 {
+				req = <-queue
+				go workerSpec.runTask(req)
+				workerSpec.CurrentC2 += 1
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
+					workerSpec.Hostname, DumpRequest(req))
+			}
+		}
+
+		// 记录扇区在本worker上执行过
+		if req != nil {
+			lotusSealingWorkers.SaveWorkTaskAssign(req, workerSpec.Hostname)
+			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 保存扇区 [%v] 记录\n",
+				workerSpec.Hostname, req.Sector.ID)
+		}
+
+		workerSpec.Locker.Unlock()
 	}
-
-	return "", fmt.Errorf("^^^^^^^^ !!! 调度器无法找到合适worker !!!\n")
 }
 
-func (sh *scheduler) Schedule(ctx context.Context, sector storage.SectorRef, taskType sealtasks.TaskType,
-	sel WorkerSelector, prepare WorkerAction, work WorkerAction) error {
-	ret := make(chan workerResponse)
+// 运行扇区任务
+func (workerSpec *WorkerTaskSpecs) runTask(request *SectorRequest) {
+	hostname := workerSpec.Hostname
+	sh := workerSpec.Scheduler
 
-	bestWorkerName, err := sh.getBestWorker(sector, taskType)
-	log.Debugf("^^^^^^^^ 调度器：获取到最优的Worker: [%v]\n", bestWorkerName)
-	if err != nil {
-		return err
-	}
+	log.Debugf("^^^^^^^^ runTask()：获取到最优的Worker: [%v]\n", hostname)
 
 	var workerID WorkerID
 	var Worker *workerHandle
 
+	// 根据worker名字，找到worker的处理接口。
 	for {
 		sh.workersLk.Lock()
 		for wid, w := range sh.workers {
-			log.Debugf("^^^^^^^^ 调度器：打印所有worker: [%v], [%v]\n", wid, w.info.Hostname)
-			if w.info.Hostname == bestWorkerName {
+			log.Debugf("^^^^^^^^ runTask()：打印所有worker: [%v], [%v]\n", wid, w.info.Hostname)
+			if w.info.Hostname == hostname {
 				Worker = w
 				sh.workersLk.Unlock()
-				log.Debugf("^^^^^^^^ 调度器：最优Worker [%v]　在线!\n", w.info.Hostname)
+				log.Debugf("^^^^^^^^ runTask()：最优Worker [%v]　在线!\n", w.info.Hostname)
 				goto Run
 			}
 		}
 
 		sh.workersLk.Unlock()
 		if Worker == nil {
-			log.Debugf("^^^^^^^^ 调度器：最优Worker [%v]　离线，等待Worker上线!\n", bestWorkerName)
-			time.Sleep(time.Second * 5)
+			log.Debugf("^^^^^^^^ runTask()：最优Worker [%v]　离线，等待Worker上线!\n", hostname)
+			time.Sleep(time.Second * 3)
 		}
 	}
 
 Run:
 
-	log.Debugf("^^^^^^^^ 调度器：扇区 [%v] 任务类型 [%v] 已经调度到 Worker [%v]上执行。\n",
-		sector.ID.Number, taskType, Worker.info.Hostname)
+	log.Debugf("^^^^^^^^ runTask()：扇区 [%v] 任务类型 [%v] 已经调度到 Worker [%v]上执行。\n",
+		request.Sector.ID.Number, request.TaskType, Worker.info.Hostname)
 
 	workFunc := func(ret chan workerResponse) {
-		err := prepare(context.TODO(), sh.workTracker.worker(workerID, Worker.workerRpc))
+		// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! //
+		if request.TaskType == sealtasks.TTAddPiece {
+			time.Sleep(time.Second * 20)
+		}
+
+		err := request.Prepare(context.TODO(), sh.workTracker.worker(workerID, Worker.workerRpc))
 		if err != nil {
-			log.Errorf("^^^^^^^^ Scheduler: prepare sector: [%] type: [%v] on worker [%v] faield: [%v]\n",
-				sector.ID, taskType, Worker.info.Hostname, err)
+			log.Errorf("^^^^^^^^ runTask() Prepare函数执行失败: [%v] type: [%v] on worker [%v] faield: [%v]\n",
+				request.Sector.ID, request.TaskType, Worker.info.Hostname, err)
 			ret <- workerResponse{err: err}
 		}
 
-		err = work(context.TODO(), sh.workTracker.worker(workerID, Worker.workerRpc))
+		err = request.Work(context.TODO(), sh.workTracker.worker(workerID, Worker.workerRpc))
 		if err != nil {
-			log.Errorf("^^^^^^^^ Scheduler: work sector: [%] type: [%v] on worker [%v] faield: [%v]\n",
-				sector.ID, taskType, Worker.info.Hostname, err)
+			log.Errorf("^^^^^^^^ runTask(): Work函数　执行结果失败: [%v] type: [%v] on worker [%v] faield: [%v]\n",
+				request.Sector.ID, request.TaskType, Worker.info.Hostname, err)
 		}
 
+		// 任务完成后，计数器减一
+		workerSpec.Locker.Lock()
+		switch request.TaskType {
+		case sealtasks.TTAddPiece:
+			workerSpec.CurrentAP -= 1
+		case sealtasks.TTPreCommit1:
+			workerSpec.CurrentPC1 -= 1
+		case sealtasks.TTPreCommit2:
+			workerSpec.CurrentPC2 -= 1
+		case sealtasks.TTCommit1:
+			workerSpec.CurrentC1 -= 1
+		case sealtasks.TTCommit2:
+			workerSpec.CurrentC2 -= 1
+		case sealtasks.TTFinalize:
+			workerSpec.CurrentFinalize -= 1
+		}
+		workerSpec.Locker.Unlock()
+
 		ret <- workerResponse{err: err}
+
 	}
 
-	log.Debugf("^^^^^^^^ Schedule Worker[%v] for sector[%v]\n", Worker.info.Hostname, sector)
+	log.Debugf("^^^^^^^^ Schedule Worker[%v] for sector[%v]\n", Worker.info.Hostname, request.Sector.ID)
 
-	go workFunc(ret)
+	go workFunc(request.RetChan)
+}
+
+// 调度器依赖的数据
+type SealingWorkers struct {
+	WorkerList    map[string]*WorkerTaskSpecs // 保存所有worker属性
+	Locker        *sync.RWMutex               // 读写锁
+	WorkAssignMap map[abi.SectorID]string     // 保存已分配的，扇区ID对应的worker
+	ScheduleQueue chan *SectorRequest         // 任务队列
+	StopChan      chan struct{}               // 接收停止信号的队列
+	DefaultNode   *WorkerTaskSpecs            // 默认的worker
+}
+
+// 将分配给扇区的worker的hostname保存
+func (workers *SealingWorkers) SaveWorkTaskAssign(request *SectorRequest, hostname string) {
+	workers.WorkAssignMap[request.Sector.ID] = hostname
+}
+
+// 根据扇区ID，获取曾经执行过该扇区的worker.
+func (workers *SealingWorkers) GetSectorWorker(request *SectorRequest) string {
+	if hostname, ok := workers.WorkAssignMap[request.Sector.ID]; ok {
+		return hostname
+	}
+
+	return ""
+}
+
+// 根据任务类型，取所有woker中任务数量最小的那个worker，返回它的hostname。
+func (workers *SealingWorkers) GetMinTaskWorker(request *SectorRequest) (string, error) {
+	var sortByValue ByValue
+
+	for _, v := range workers.WorkerList {
+		var sortItem SortStruct
+		sortItem.Hostname = v.Hostname
+
+		switch request.TaskType {
+		case sealtasks.TTAddPiece:
+			sortItem.Value = v.CurrentAP
+		case sealtasks.TTPreCommit1:
+			sortItem.Value = v.CurrentPC1
+		case sealtasks.TTPreCommit2:
+			sortItem.Value = v.CurrentPC2
+		case sealtasks.TTCommit1:
+			sortItem.Value = v.CurrentC1
+		case sealtasks.TTCommit2:
+			sortItem.Value = v.CurrentC2
+		}
+
+		sortByValue = append(sortByValue, sortItem)
+	}
+
+	sort.Sort(sortByValue)
+	if len(sortByValue) > 0 {
+		hostname := sortByValue[0].Hostname
+		return hostname, nil
+	}
+
+	return "", ErrorNoAvaiableWorker
+}
+
+var lotusSealingWorkers *SealingWorkers
+
+func IntWorerList(scheduler *scheduler) {
+	lotusSealingWorkers = new(SealingWorkers)
+
+	lotusSealingWorkers.Locker = new(sync.RWMutex)
+
+	lotusSealingWorkers.Locker.Lock()
+	defer lotusSealingWorkers.Locker.Unlock()
+
+	lotusSealingWorkers.WorkerList = make(map[string]*WorkerTaskSpecs, 512)
+
+	node1 := NewWorkerTaskSpeec(scheduler, "miner-node", 1, 8, 8, 1, 1, 1)
+
+	//node2 := NewWorkerTaskSpeec("worker-hode", 4, 2, 2, 1, 1, 1)
+
+	lotusSealingWorkers.WorkerList[node1.Hostname] = node1
+	//lotusSealingWorkers.WorkerList[node2.Hostname] = node2
+
+	lotusSealingWorkers.Locker = new(sync.RWMutex)
+	lotusSealingWorkers.WorkAssignMap = make(map[abi.SectorID]string, 512)
+	lotusSealingWorkers.ScheduleQueue = make(chan *SectorRequest, 512)
+	lotusSealingWorkers.StopChan = make(chan struct{})
+
+	lotusSealingWorkers.DefaultNode = node1
+}
+
+func DumpRequest(req *SectorRequest) string {
+	return fmt.Sprintf("扇区: %v, 类型: %v", req.Sector.ID, req.TaskType)
+}
+
+func (sh *scheduler) Schedule(ctx context.Context, sector storage.SectorRef, taskType sealtasks.TaskType,
+	sel WorkerSelector, prepare WorkerAction, work WorkerAction) error {
+	ret := make(chan workerResponse)
+
+	request := &SectorRequest{
+		Sector:   sector,
+		TaskType: taskType,
+		Selector: sel,
+		Prepare:  prepare,
+		Work:     work,
+		RetChan:  ret,
+	}
+
+	select {
+	case lotusSealingWorkers.ScheduleQueue <- request:
+		log.Infof("^^^^^^^^ Schedule() 将任务 [%v] 发送到调度队列.\n", DumpRequest(request))
+	case <-sh.closing:
+		return xerrors.New("closing")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 
 	select {
 	case resp := <-ret:
+		log.Infof("^^^^^^^^ Schedule() 任务 [%v] 返回结果.\n", DumpRequest(request))
 		return resp.err
+	case <-sh.closing:
+		return xerrors.New("closing")
+	case <-ctx.Done():
+		return ctx.Err()
 	}
+}
 
-	return nil
+func (sh *scheduler) doSched() {
+
+	for {
+
+		var workeRequest *SectorRequest
+		select {
+		case workeRequest = <-lotusSealingWorkers.ScheduleQueue:
+			log.Infof("^^^^^^^^ doSched() 接收到任务请求 [%v].", DumpRequest(workeRequest))
+		case <-lotusSealingWorkers.StopChan:
+			return
+		}
+
+		var bestWorkerName string
+		var err error
+
+		lotusSealingWorkers.Locker.Lock()
+		// 如果是AddPiece任务，直接选择一个任务数量最小的worker执行.
+		// 如果数量最小的worker超过了任务最大限制，或者没有可用的worker，
+		// 就直接把扇区任务PUSH到等待队列中。
+		if workeRequest.TaskType == sealtasks.TTAddPiece {
+
+			// 超找add piece最小任务数量的worker
+			bestWorkerName, err = lotusSealingWorkers.GetMinTaskWorker(workeRequest)
+			if err == ErrorNoAvaiableWorker {
+				log.Errorf("^^^^^^^^ AddPiece任务无法找到合适的worker\n")
+			}
+
+		} else if workeRequest.TaskType == sealtasks.TTFetch {
+
+			// 如果是Fetch类型任务，让miner执行。
+			// TODO: 执行sector selector选择worker.
+			bestWorkerName = lotusSealingWorkers.DefaultNode.Hostname
+
+			log.Infof("^^^^^^^^ doSched() 任务 [%v] 是Fetch类型的任务，选择在默认Worker [%v] 运行.\n",
+				DumpRequest(workeRequest), bestWorkerName)
+
+		} else {
+
+			// 如果是其他类型：PC1、PC2、C1、C2、Finalize
+			// 查找扇区是否曾经在某个worker上执行
+			hostname := lotusSealingWorkers.GetSectorWorker(workeRequest)
+
+			// 如果任务曾经在worker上执行
+			if len(hostname) > 0 {
+				// 找到合适的worker
+				bestWorkerName = hostname
+				log.Infof("^^^^^^^^ doSched() 任务 [%v] 在Worker [%v] 上曾经运行过，继续选择该Worker.\n",
+					DumpRequest(workeRequest), hostname)
+			} else {
+				// 任务从来未在任何worker上运行过
+				bestWorkerName = lotusSealingWorkers.DefaultNode.Hostname
+				log.Infof("^^^^^^^^ doSched() 任务 [%v] 从未在任何Worker上运行过，选择默认Worker [%v] 运行.\n",
+					DumpRequest(workeRequest), hostname)
+			}
+		}
+
+		log.Infof("^^^^^^^^ doSched() 任务 [%v] 在worker [%v]上执行.\n",
+			DumpRequest(workeRequest), bestWorkerName)
+
+		// 找到worker，把任务请求发送到worker的任务队列中。
+		if worker, ok := lotusSealingWorkers.WorkerList[bestWorkerName]; ok {
+			worker.RequestSignal <- workeRequest
+			log.Infof("^^^^^^^^ doSched() 任务 [%v] 发送到了 Worker [%v] 的任务队列中.\n",
+				DumpRequest(workeRequest), bestWorkerName)
+		}
+
+		lotusSealingWorkers.Locker.Unlock()
+	}
 }
 
 /*
@@ -377,6 +672,9 @@ type SchedDiagInfo struct {
 }
 
 func (sh *scheduler) runSched() {
+	IntWorerList(sh)
+	sh.doSched()
+
 	defer close(sh.closed)
 
 	iw := time.After(InitWait)
