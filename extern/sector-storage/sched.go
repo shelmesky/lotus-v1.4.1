@@ -673,7 +673,7 @@ type SchedDiagInfo struct {
 
 func (sh *scheduler) runSched() {
 	IntWorerList(sh)
-	sh.doSched()
+	go sh.doSched()
 
 	defer close(sh.closed)
 
