@@ -2,6 +2,7 @@ package sectorstorage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"golang.org/x/xerrors"
@@ -72,6 +73,8 @@ type scheduler struct {
 	closing  chan struct{}
 	closed   chan struct{}
 	testSync chan struct{} // used for testing
+
+	manager *Manager
 }
 
 type workerHandle struct {
@@ -546,6 +549,41 @@ func (sh *scheduler) Schedule(ctx context.Context, sector storage.SectorRef, tas
 	}
 }
 
+func (sh *scheduler) getSectorWorker(sectorNumber abi.SectorNumber) string {
+	var stats []WorkState
+	if err := sh.manager.work.List(&stats); err != nil {
+		log.Error("getting work IDs")
+	}
+
+	for idx := range stats {
+		stat := stats[idx]
+		var args_list [][]interface{}
+		err := json.Unmarshal([]byte(stat.ID.Params), &args_list)
+		if err != nil {
+			log.Debugf("^^^^^^^^ getSectorWorker() 反序列化扇区参数错误: [%v]\n", err)
+			return ""
+		}
+
+		if len(args_list) > 0 {
+			if len(args_list[0]) > 0 {
+				sector := args_list[0][0]
+
+				if sectorObj, ok := sector.(map[string]interface{}); ok {
+					if WorkID, ok := sectorObj["ID"].(map[string]interface{}); ok {
+						if sectorNumberFloat, ok := WorkID["Number"].(float64); ok {
+							if int(sectorNumberFloat) == int(sectorNumber) {
+								return stat.WorkerHostname
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
 func (sh *scheduler) doSched() {
 
 	for {
@@ -593,12 +631,24 @@ func (sh *scheduler) doSched() {
 				// 找到合适的worker
 				bestWorkerName = hostname
 				log.Infof("^^^^^^^^ doSched() 任务 [%v] 在Worker [%v] 上曾经运行过，继续选择该Worker.\n",
-					DumpRequest(workeRequest), hostname)
+					DumpRequest(workeRequest), bestWorkerName)
 			} else {
 				// 任务从来未在任何worker上运行过
-				bestWorkerName = lotusSealingWorkers.DefaultNode.Hostname
-				log.Infof("^^^^^^^^ doSched() 任务 [%v] 从未在任何Worker上运行过，选择默认Worker [%v] 运行.\n",
-					DumpRequest(workeRequest), hostname)
+				// 尝试在m.work中查找之前保存过的worker和任务分配记录
+				oldWorker := sh.getSectorWorker(workeRequest.Sector.ID.Number)
+				if len(oldWorker) > 0 {
+					bestWorkerName = oldWorker
+					log.Infof("^^^^^^^^ doSched() 任务 [%v] 在数据库中记录在Worker [%v] 上运行过，继续选择该Worker.\n",
+						DumpRequest(workeRequest), bestWorkerName)
+				} else {
+					// 如果找不到就找最小任务数量的worker
+					bestWorkerName, err = lotusSealingWorkers.GetMinTaskWorker(workeRequest)
+					if err == ErrorNoAvaiableWorker {
+						log.Errorf("^^^^^^^^ 任务 [%v] 无法找到合适的worker\n")
+					}
+					log.Infof("^^^^^^^^ doSched() 任务 [%v] 从未在任何Worker上运行过，选择任务数最小的Worker [%v] 运行.\n",
+						DumpRequest(workeRequest), bestWorkerName)
+				}
 			}
 		}
 

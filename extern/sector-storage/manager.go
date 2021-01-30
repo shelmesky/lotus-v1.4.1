@@ -166,6 +166,8 @@ func New(ctx context.Context, ls stores.LocalStorage, si stores.SectorIndex, sc 
 		return nil, xerrors.Errorf("adding local worker: %w", err)
 	}
 
+	m.sched.manager = m
+
 	return m, nil
 }
 
