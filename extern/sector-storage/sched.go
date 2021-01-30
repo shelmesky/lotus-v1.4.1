@@ -469,11 +469,48 @@ func (workers *SealingWorkers) GetSectorWorker(request *SectorRequest) string {
 	return ""
 }
 
+func (workers *SealingWorkers) GetWorkerList(request *SectorRequest) []*WorkerTaskSpecs {
+	var workerList []*WorkerTaskSpecs
+
+	for _, v := range workers.WorkerList {
+		switch request.TaskType {
+		case sealtasks.TTAddPiece:
+			if v.MaxAP == 0 {
+				continue
+			}
+		case sealtasks.TTPreCommit1:
+			if v.MaxPC1 == 0 {
+				continue
+			}
+		case sealtasks.TTPreCommit2:
+			if v.MaxPC2 == 0 {
+				continue
+			}
+		case sealtasks.TTCommit1:
+			if v.MaxC1 == 0 {
+				continue
+			}
+		case sealtasks.TTCommit2:
+			if v.MaxC2 == 0 {
+				continue
+			}
+		}
+
+		workerList = append(workerList, v)
+	}
+
+	return workerList
+}
+
 // 根据任务类型，取所有woker中任务数量最小的那个worker，返回它的hostname。
 func (workers *SealingWorkers) GetMinTaskWorker(request *SectorRequest) (string, error) {
 	var sortByValue ByValue
 
-	for _, v := range workers.WorkerList {
+	workerList := workers.GetWorkerList(request)
+
+	for idx := range workerList {
+		v := workerList[idx]
+
 		var sortItem SortStruct
 		sortItem.Hostname = v.Hostname
 
@@ -514,7 +551,7 @@ func IntWorerList(scheduler *scheduler) {
 
 	lotusSealingWorkers.WorkerList = make(map[string]*WorkerTaskSpecs, 512)
 
-	node1 := NewWorkerTaskSpeec(scheduler, "miner-node-1", 1, 4, 2, 2, 2, 2)
+	node1 := NewWorkerTaskSpeec(scheduler, "miner-node-1", 0, 4, 2, 2, 2, 2)
 	//node2 := NewWorkerTaskSpeec(scheduler, "worker-node-1", 4, 4, 2, 2, 2, 2)
 	node3 := NewWorkerTaskSpeec(scheduler, "worker-node-2", 1, 4, 2, 2, 2, 2)
 
