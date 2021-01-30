@@ -285,7 +285,8 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n", workerSpec.Hostname, DumpRequest(req))
 			}
 		} else {
-			log.Warnf("^^^^^^^^ !!! AddPiece 超过最大数量: [%v > %v] !!!\n", workerSpec.CurrentAP, workerSpec.MaxAP)
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] AddPiece 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+				workerSpec.Hostname, workerSpec.CurrentAP, workerSpec.MaxAP)
 		}
 
 		// PreCommit1
@@ -298,6 +299,9 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
 					workerSpec.Hostname, DumpRequest(req))
 			}
+		} else {
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] PreCommit1 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+				workerSpec.Hostname, workerSpec.CurrentPC1, workerSpec.MaxPC1)
 		}
 
 		// PreCommit2
@@ -310,6 +314,9 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
 					workerSpec.Hostname, DumpRequest(req))
 			}
+		} else {
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] PreCommit2 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+				workerSpec.Hostname, workerSpec.CurrentPC2, workerSpec.MaxPC2)
 		}
 
 		// Commit1
@@ -322,6 +329,9 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
 					workerSpec.Hostname, DumpRequest(req))
 			}
+		} else {
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] Commit1 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+				workerSpec.Hostname, workerSpec.CurrentC1, workerSpec.MaxC1)
 		}
 
 		// Commit2
@@ -334,12 +344,15 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
 					workerSpec.Hostname, DumpRequest(req))
 			}
+		} else {
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] Commit2 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+				workerSpec.Hostname, workerSpec.CurrentC2, workerSpec.MaxC2)
 		}
 
 		// 记录扇区在本worker上执行过
 		if req != nil {
 			lotusSealingWorkers.SaveWorkTaskAssign(req, workerSpec.Hostname)
-			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 保存扇区 [%v] 记录\n",
+			log.Debugf("^^^^^^^^ Worker[%v] -> runWorkerTaskLoop() 保存扇区 [%v] 记录\n",
 				workerSpec.Hostname, req.Sector.ID)
 		}
 
@@ -352,7 +365,7 @@ func (workerSpec *WorkerTaskSpecs) runTask(request *SectorRequest) {
 	hostname := workerSpec.Hostname
 	sh := workerSpec.Scheduler
 
-	log.Debugf("^^^^^^^^ runTask()：获取到最优的Worker: [%v]\n", hostname)
+	log.Debugf("^^^^^^^^ Worker:[%v] -> runTask()：获取到最优的Worker: [%v]\n", workerSpec.Hostname, hostname)
 
 	var workerID WorkerID
 	var Worker *workerHandle
@@ -361,26 +374,29 @@ func (workerSpec *WorkerTaskSpecs) runTask(request *SectorRequest) {
 	for {
 		sh.workersLk.Lock()
 		for wid, w := range sh.workers {
-			log.Debugf("^^^^^^^^ runTask()：打印所有worker: [%v], [%v]\n", wid, w.info.Hostname)
+			log.Debugf("^^^^^^^^ Worker:[%v] -> runTask()：打印所有worker: [%v], [%v]\n", workerSpec.Hostname,
+				wid, w.info.Hostname)
 			if w.info.Hostname == hostname {
 				Worker = w
 				sh.workersLk.Unlock()
-				log.Debugf("^^^^^^^^ runTask()：最优Worker [%v]　在线!\n", w.info.Hostname)
+				log.Debugf("^^^^^^^^ Worker:[%v] -> runTask()：最优Worker [%v]　在线!\n", workerSpec.Hostname,
+					w.info.Hostname)
 				goto Run
 			}
 		}
 
 		sh.workersLk.Unlock()
 		if Worker == nil {
-			log.Debugf("^^^^^^^^ runTask()：最优Worker [%v]　离线，等待Worker上线!\n", hostname)
+			log.Debugf("^^^^^^^^ Worker:[%v] -> runTask()：最优Worker [%v]　离线，等待Worker上线!\n",
+				workerSpec.Hostname, hostname)
 			time.Sleep(time.Second * 3)
 		}
 	}
 
 Run:
 
-	log.Debugf("^^^^^^^^ runTask()：扇区 [%v] 任务类型 [%v] 已经调度到 Worker [%v]上执行。\n",
-		request.Sector.ID.Number, request.TaskType, Worker.info.Hostname)
+	log.Debugf("^^^^^^^^ Worker:[%v] -> runTask()：扇区 [%v] 任务类型 [%v] 已经调度到 Worker [%v]上执行。\n",
+		workerSpec.Hostname, request.Sector.ID.Number, request.TaskType, Worker.info.Hostname)
 
 	workFunc := func(ret chan workerResponse) {
 		// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! //
@@ -390,15 +406,15 @@ Run:
 
 		err := request.Prepare(context.TODO(), sh.workTracker.worker(workerID, Worker.workerRpc))
 		if err != nil {
-			log.Errorf("^^^^^^^^ runTask() Prepare函数执行失败: [%v] type: [%v] on worker [%v] faield: [%v]\n",
-				request.Sector.ID, request.TaskType, Worker.info.Hostname, err)
+			log.Errorf("^^^^^^^^ Worker:[%v] -> runTask() Prepare函数执行失败: [%v] type: [%v] on worker [%v] faield: [%v]\n",
+				workerSpec.Hostname, request.Sector.ID, request.TaskType, Worker.info.Hostname, err)
 			ret <- workerResponse{err: err}
 		}
 
 		err = request.Work(context.TODO(), sh.workTracker.worker(workerID, Worker.workerRpc))
 		if err != nil {
-			log.Errorf("^^^^^^^^ runTask(): Work函数　执行结果失败: [%v] type: [%v] on worker [%v] faield: [%v]\n",
-				request.Sector.ID, request.TaskType, Worker.info.Hostname, err)
+			log.Errorf("^^^^^^^^ Worker:[%v] -> runTask(): Work函数　执行结果失败: [%v] type: [%v] on worker [%v] faield: [%v]\n",
+				workerSpec.Hostname, request.Sector.ID, request.TaskType, Worker.info.Hostname, err)
 		}
 
 		// 任务完成后，计数器减一
@@ -423,7 +439,8 @@ Run:
 
 	}
 
-	log.Debugf("^^^^^^^^ Schedule Worker[%v] for sector[%v]\n", Worker.info.Hostname, request.Sector.ID)
+	log.Debugf("^^^^^^^^ Worker:[%v] -> runTask() 执行扇区任务: Worker[%v] for sector[%v]\n",
+		workerSpec.Hostname, Worker.info.Hostname, request.Sector.ID)
 
 	go workFunc(request.RetChan)
 }
@@ -497,12 +514,13 @@ func IntWorerList(scheduler *scheduler) {
 
 	lotusSealingWorkers.WorkerList = make(map[string]*WorkerTaskSpecs, 512)
 
-	node1 := NewWorkerTaskSpeec(scheduler, "miner-node", 1, 8, 8, 1, 1, 1)
-
-	//node2 := NewWorkerTaskSpeec("worker-hode", 4, 2, 2, 1, 1, 1)
+	node1 := NewWorkerTaskSpeec(scheduler, "miner-node-1", 2, 4, 2, 2, 2, 2)
+	node2 := NewWorkerTaskSpeec(scheduler, "worker-node-1", 2, 4, 2, 2, 2, 2)
+	node3 := NewWorkerTaskSpeec(scheduler, "worker-node-2", 2, 4, 2, 2, 2, 2)
 
 	lotusSealingWorkers.WorkerList[node1.Hostname] = node1
-	//lotusSealingWorkers.WorkerList[node2.Hostname] = node2
+	lotusSealingWorkers.WorkerList[node2.Hostname] = node2
+	lotusSealingWorkers.WorkerList[node3.Hostname] = node3
 
 	lotusSealingWorkers.Locker = new(sync.RWMutex)
 	lotusSealingWorkers.WorkAssignMap = make(map[abi.SectorID]string, 512)
