@@ -35,7 +35,14 @@ func (m *Manager) WorkerJobs() map[uuid.UUID][]storiface.WorkerJob {
 
 	log.Infof("^^^^^^^^ 00000000 calling WorkerJobs\n")
 
+	lotusSealingWorkers.Locker.RLock()
+	defer lotusSealingWorkers.Locker.RUnlock()
 	for _, t := range m.sched.workTracker.Running() {
+		if hostname, ok := lotusSealingWorkers.WorkAssignMap[t.job.Sector]; ok {
+			t.job.Hostname = hostname
+		} else {
+			t.job.Hostname = "unkonw"
+		}
 		//hostname := sectorInWorker[t.job.Sector.Number]
 		//t.job.Hostname = hostname
 		out[uuid.UUID(t.worker)] = append(out[uuid.UUID(t.worker)], t.job)
