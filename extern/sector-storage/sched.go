@@ -698,12 +698,13 @@ func (sh *scheduler) doSched() {
 				ok, err := workeRequest.Selector.Ok(context.TODO(), workeRequest.TaskType, workeRequest.Sector.ProofType,
 					workerHander)
 				if err != nil {
-					log.Errorf("^^^^^^^^  Woker [%v] 执行 Selector.OK() 错误 [%v]\n",
-						workerHander.info.Hostname, err)
+					log.Errorf("^^^^^^^^  任务: [%v] Woker [%v] 执行 Selector.OK() 错误 [%v]\n",
+						DumpRequest(workeRequest), workerHander.info.Hostname, err)
 					continue
 				}
 				if !ok {
-					log.Debugf("^^^^^^^^ Worker [%v] 不符合过滤器\n", workerHander.info.Hostname)
+					log.Debugf("^^^^^^^^ 任务: [%v] Worker [%v] 不符合过滤器\n",
+						DumpRequest(workeRequest), workerHander.info.Hostname)
 					continue
 				}
 				avaiableWorker = append(avaiableWorker, workerHander)
@@ -712,7 +713,8 @@ func (sh *scheduler) doSched() {
 
 			for idx := range avaiableWorker {
 				worker := avaiableWorker[idx]
-				log.Infof("^^^^^^^^ 过滤后的 Worker-%d: [%v]\n", idx, worker.info.Hostname)
+				log.Infof("^^^^^^^^ 任务: [%v] 过滤后的 Worker-%d: [%v]\n",
+					DumpRequest(workeRequest), idx, worker.info.Hostname)
 			}
 
 			// 如果是其他类型：PC1、PC2、C1、C2、Finalize
