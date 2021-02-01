@@ -492,6 +492,44 @@ type SealingWorkers struct {
 	DefaultNode   *WorkerTaskSpecs            // 默认的worker
 }
 
+// 检查某个worker的任务类型是否已满
+func (workers *SealingWorkers) GetWorkerCount(request *SectorRequest, hostname string) bool {
+	if worker, ok := workers.WorkerList[hostname]; ok {
+		switch request.TaskType {
+		case sealtasks.TTAddPiece:
+			if worker.CurrentAP >= worker.MaxAP {
+				return true
+			}
+		case sealtasks.TTPreCommit1:
+			if worker.CurrentPC1 >= worker.MaxPC1 {
+				return true
+			}
+		case sealtasks.TTPreCommit2:
+			if worker.CurrentPC2 >= worker.MaxPC2 {
+				return true
+			}
+		case sealtasks.TTCommit1:
+			if worker.CurrentC1 >= worker.MaxC1 {
+				return true
+			}
+		case sealtasks.TTCommit2:
+			if worker.CurrentC2 >= worker.MaxC2 {
+				return true
+			}
+		case sealtasks.TTFinalize:
+			if worker.CurrentFinalize >= worker.MaxFinalize {
+				return true
+			}
+		case sealtasks.TTFetch:
+			if worker.CurrentFetch >= worker.MaxFetch {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // 将分配给扇区的worker的hostname保存
 func (workers *SealingWorkers) SaveWorkTaskAssign(request *SectorRequest, hostname string) {
 	workers.WorkAssignMap[request.Sector.ID] = hostname
@@ -807,8 +845,43 @@ func (sh *scheduler) doSched() {
 
 			// 如果任务曾经在worker上执行
 			if len(hostname) > 0 {
-				// 但如果该worker上任务数量已满，就从worker列表中选择一个没有满的worker.
-				// 如果所有worker上列表已经满，且不是PC1任务，就选择曾经运行过得worker.
+
+				workerList := lotusSealingWorkers.GetWorkerList(workeRequest, []string{})
+
+				// 如果任务是PC1，并且该worker上的任务数量已满，就寻找一个未满的worker.
+				// 如果未找到，就寻找所有worker中数量最小的那个.
+				if lotusSealingWorkers.GetWorkerCount(workeRequest, hostname) &&
+					workeRequest.TaskType == sealtasks.TTPreCommit1 {
+
+					log.Warnf("^^^^^^^^ doSched() -> 任务 [%v] 找到了之前曾经运行的 Worker[%v]," +
+						"但是该Worker任务数量过多，尝试寻找未超过数量的Worker.\n")
+
+					var tempName string
+					foundAvaiable := false
+					for i := 0; i < len(lotusSealingWorkers.WorkerList); i++ {
+						tempName = workerList[i].Hostname
+						overLoad := lotusSealingWorkers.GetWorkerCount(workeRequest, tempName)
+						if !overLoad {
+							foundAvaiable = true
+							break
+						}
+					}
+
+					if foundAvaiable {
+						hostname = tempName
+						log.Warnf("^^^^^^^^ doSched() -> 任务 [%v] 找到了数量更少的Worker[%v].\n",
+							DumpRequest(workeRequest), hostname)
+					} else {
+						minTaskWorker, err := lotusSealingWorkers.GetMinTaskWorker(workeRequest, []string{})
+						if err == ErrorNoAvaiableWorker {
+							log.Errorf("^^^^^^^^ doSched() -> 任务 [%v] 无法找到合适的worker\n",
+								DumpRequest(workeRequest))
+						}
+						hostname = minTaskWorker
+						log.Warnf("^^^^^^^^ doSched() -> 任务 [%v] 所有的Worker数量已满"+
+							"只能寻找其中最小数量的Worker[%v]\n", DumpRequest(workeRequest), hostname)
+					}
+				}
 
 				// 找到合适的worker
 				bestWorkerName = hostname
@@ -828,7 +901,8 @@ func (sh *scheduler) doSched() {
 					// 如果找不到就找最小任务数量的worker，同时应用过滤器，过滤掉不符合规则的worker.
 					bestWorkerName, err = lotusSealingWorkers.GetMinTaskWorker(workeRequest, invalidWorkerList)
 					if err == ErrorNoAvaiableWorker {
-						log.Errorf("^^^^^^^^ doSched() -> 任务 [%v] 无法找到合适的worker\n")
+						log.Errorf("^^^^^^^^ doSched() -> 任务 [%v] 无法找到合适的worker\n",
+							DumpRequest(workeRequest))
 					}
 					log.Infof("^^^^^^^^ doSched() -> 任务 [%v] 从未在任何Worker上运行过，选择任务数最小的Worker [%v] 运行.\n",
 						DumpRequest(workeRequest), bestWorkerName)
