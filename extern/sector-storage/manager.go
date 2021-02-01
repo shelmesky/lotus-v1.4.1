@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-multierror"
@@ -387,6 +388,7 @@ func (m *Manager) SealPreCommit1(ctx context.Context, sector storage.SectorRef, 
 		if err != nil {
 			return err
 		}
+		time.Sleep(30 * time.Second)
 
 		waitRes()
 		return nil
