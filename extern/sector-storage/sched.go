@@ -349,6 +349,20 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 				workerSpec.Hostname, workerSpec.CurrentC2, workerSpec.MaxC2)
 		}
 
+		if workerSpec.CurrentFinalize < workerSpec.MaxFinalize {
+			queue := workerSpec.RequestQueueMap[sealtasks.TTFinalize]
+			if len(queue) > 0 {
+				req := <-queue
+				go workerSpec.runTask(req)
+				workerSpec.CurrentFinalize += 1
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
+					workerSpec.Hostname, DumpRequest(req))
+			}
+		} else {
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] Finalize 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+				workerSpec.Hostname, workerSpec.CurrentFinalize, workerSpec.MaxFinalize)
+		}
+
 		// 记录扇区在本worker上执行过
 		if req != nil {
 			lotusSealingWorkers.SaveWorkTaskAssign(req, workerSpec.Hostname)
