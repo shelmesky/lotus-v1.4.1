@@ -853,8 +853,8 @@ func (sh *scheduler) doSched() {
 				if lotusSealingWorkers.GetWorkerCount(workeRequest, hostname) &&
 					workeRequest.TaskType == sealtasks.TTPreCommit1 {
 
-					log.Warnf("^^^^^^^^ doSched() -> 任务 [%v] 找到了之前曾经运行的 Worker[%v]," +
-						"但是该Worker任务数量过多，尝试寻找未超过数量的Worker.\n")
+					log.Warnf("^^^^^^^^ doSched() -> 任务 [%v] 找到了之前曾经运行的 Worker[%v],"+
+						"但是该Worker任务数量过多，尝试寻找未超过数量的Worker.\n", DumpRequest(workeRequest), hostname)
 
 					var tempName string
 					foundAvaiable := false
