@@ -691,6 +691,30 @@ func (sh *scheduler) doSched() {
 
 		} else {
 
+			sh.workersLk.RLock()
+			var avaiableWorker []*workerHandle
+			for idx := range sh.workers {
+				workerHander := sh.workers[idx]
+				ok, err := workeRequest.Selector.Ok(context.TODO(), workeRequest.TaskType, workeRequest.Sector.ProofType,
+					workerHander)
+				if err != nil {
+					log.Errorf("^^^^^^^^  Woker [%v] 执行 Selector.OK() 错误 [%v]\n",
+						workerHander.info.Hostname, err)
+					continue
+				}
+				if !ok {
+					log.Debugf("^^^^^^^^ Worker [%v] 不符合过滤器\n", workerHander.info.Hostname)
+					continue
+				}
+				avaiableWorker = append(avaiableWorker, workerHander)
+			}
+			sh.workersLk.RUnlock()
+
+			for idx := range avaiableWorker {
+				worker := avaiableWorker[idx]
+				log.Infof("^^^^^^^^ 过滤后的 Worker-%d: [%v]\n", idx, worker.info.Hostname)
+			}
+
 			// 如果是其他类型：PC1、PC2、C1、C2、Finalize
 			// 查找扇区是否曾经在某个worker上执行
 			hostname := lotusSealingWorkers.GetSectorWorker(workeRequest)
