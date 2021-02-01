@@ -389,6 +389,9 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 			lotusSealingWorkers.SaveWorkTaskAssign(req, workerSpec.Hostname)
 			log.Debugf("^^^^^^^^ Worker[%v] -> runWorkerTaskLoop() 保存扇区 [%v] 记录\n",
 				workerSpec.Hostname, req.Sector.ID)
+		} else {
+			log.Warnf("^^^^^^^^ Worker[%v] -> runWorkerTaskLoop() 接收到任务 [%v]，但是任务数量已满，暂未执行.",
+				workerSpec.Hostname, DumpRequest(req))
 		}
 
 		workerSpec.Locker.Unlock()
