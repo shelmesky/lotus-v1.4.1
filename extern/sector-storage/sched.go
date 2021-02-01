@@ -272,7 +272,7 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 		case <-workerSpec.StopChan:
 			log.Warnf("Worker: [%v] runWorkerTaskLoop() 退出!\n", workerSpec.Hostname)
 			return
-		case <-time.After(3000 * time.Millisecond):
+		case <-time.After(10 * time.Second):
 			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 定时器到期...", workerSpec.Hostname)
 		}
 
