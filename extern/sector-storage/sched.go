@@ -265,9 +265,11 @@ func NewWorkerTaskSpeec(sh *scheduler, hostname string, maxAP, maxPC1, maxPC2, m
 func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 	log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始运行...", workerSpec.Hostname)
 	for {
+		hasTask := false
 		select {
 		case req := <-workerSpec.RequestSignal:
 			workerSpec.RequestQueueMap[req.TaskType] <- req
+			hasTask = true
 			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 获取到任务 [%v]\n", workerSpec.Hostname, DumpRequest(req))
 		case <-workerSpec.StopChan:
 			log.Warnf("Worker: [%v] runWorkerTaskLoop() 退出!\n", workerSpec.Hostname)
@@ -390,8 +392,10 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 			log.Debugf("^^^^^^^^ Worker[%v] -> runWorkerTaskLoop() 保存扇区 [%v] 记录\n",
 				workerSpec.Hostname, req.Sector.ID)
 		} else {
-			log.Warnf("^^^^^^^^ Worker[%v] -> runWorkerTaskLoop() 接收到任务 [%v]，但是任务数量已满，暂未执行.",
-				workerSpec.Hostname, DumpRequest(req))
+			if hasTask {
+				log.Warnf("^^^^^^^^ Worker[%v] -> runWorkerTaskLoop() 接收到任务 [%v]，但是任务数量已满，暂未执行.",
+					workerSpec.Hostname, DumpRequest(req))
+			}
 		}
 
 		workerSpec.Locker.Unlock()
