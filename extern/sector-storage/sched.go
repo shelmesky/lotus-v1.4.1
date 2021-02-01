@@ -381,7 +381,7 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 			}
 		} else {
 			log.Warnf("^^^^^^^^ !!! Worker:[%v] Fetch 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
-				workerSpec.Hostname, workerSpec.CurrentFinalize, workerSpec.MaxFinalize)
+				workerSpec.Hostname, workerSpec.CurrentFetch, workerSpec.MaxFetch)
 		}
 
 		// 记录扇区在本worker上执行过
@@ -605,6 +605,10 @@ func (workers *SealingWorkers) GetMinTaskWorker(request *SectorRequest, filterLi
 			sortItem.Value = v.CurrentC1
 		case sealtasks.TTCommit2:
 			sortItem.Value = v.CurrentC2
+		case sealtasks.TTFinalize:
+			sortItem.Value = v.CurrentFinalize
+		case sealtasks.TTFetch:
+			sortItem.Value = v.CurrentFetch
 		}
 
 		sortByValue = append(sortByValue, sortItem)
