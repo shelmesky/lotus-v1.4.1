@@ -220,6 +220,8 @@ type WorkerTaskSpecs struct {
 	MaxC2           int
 	CurrentFinalize int
 	MaxFinalize     int
+	CurrentFetch    int
+	MaxFetch        int
 	RequestSignal   chan *SectorRequest                        // 接收任务的队列
 	RequestQueueMap map[sealtasks.TaskType]chan *SectorRequest // 每种任务类型对应的队列
 	StopChan        chan bool                                  // 接收停止信号的channel
@@ -227,7 +229,9 @@ type WorkerTaskSpecs struct {
 	Scheduler       *scheduler                                 // 全局调度器
 }
 
-func NewWorkerTaskSpeec(sh *scheduler, hostname string, maxAP, maxPC1, maxPC2, maxC1, maxC2, maxFinal int) *WorkerTaskSpecs {
+func NewWorkerTaskSpeec(sh *scheduler, hostname string, maxAP, maxPC1, maxPC2, maxC1, maxC2,
+	maxFinal, maxFetch int) *WorkerTaskSpecs {
+
 	var workerSpece WorkerTaskSpecs
 
 	workerSpece.Locker = new(sync.Mutex)
@@ -239,6 +243,7 @@ func NewWorkerTaskSpeec(sh *scheduler, hostname string, maxAP, maxPC1, maxPC2, m
 	workerSpece.MaxC1 = maxC1
 	workerSpece.MaxC2 = maxC2
 	workerSpece.MaxFinalize = maxFinal
+	workerSpece.MaxFetch = maxFetch
 
 	workerSpece.RequestSignal = make(chan *SectorRequest, 512)
 
@@ -349,6 +354,7 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 				workerSpec.Hostname, workerSpec.CurrentC2, workerSpec.MaxC2)
 		}
 
+		// Finalize
 		if workerSpec.CurrentFinalize < workerSpec.MaxFinalize {
 			queue := workerSpec.RequestQueueMap[sealtasks.TTFinalize]
 			if len(queue) > 0 {
@@ -360,6 +366,21 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 			}
 		} else {
 			log.Warnf("^^^^^^^^ !!! Worker:[%v] Finalize 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+				workerSpec.Hostname, workerSpec.CurrentFinalize, workerSpec.MaxFinalize)
+		}
+
+		// Fetch
+		if workerSpec.CurrentFetch < workerSpec.MaxFetch {
+			queue := workerSpec.RequestQueueMap[sealtasks.TTFetch]
+			if len(queue) > 0 {
+				req := <-queue
+				go workerSpec.runTask(req)
+				workerSpec.CurrentFetch += 1
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
+					workerSpec.Hostname, DumpRequest(req))
+			}
+		} else {
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] Fetch 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
 				workerSpec.Hostname, workerSpec.CurrentFinalize, workerSpec.MaxFinalize)
 		}
 
@@ -446,6 +467,8 @@ Run:
 			workerSpec.CurrentC2 -= 1
 		case sealtasks.TTFinalize:
 			workerSpec.CurrentFinalize -= 1
+		case sealtasks.TTFetch:
+			workerSpec.CurrentFetch -= 1
 		}
 		workerSpec.Locker.Unlock()
 
@@ -536,6 +559,20 @@ func (workers *SealingWorkers) GetWorkerList(request *SectorRequest, filterList 
 			if v.MaxC2 == 0 {
 				continue
 			}
+		case sealtasks.TTFinalize:
+			if checkFilterFunc(v.Hostname) {
+				continue
+			}
+			if v.MaxFinalize == 0 {
+				continue
+			}
+		case sealtasks.TTFetch:
+			if checkFilterFunc(v.Hostname) {
+				continue
+			}
+			if v.MaxFetch == 0 {
+				continue
+			}
 		}
 
 		workerList = append(workerList, v)
@@ -584,7 +621,7 @@ func (workers *SealingWorkers) GetMinTaskWorker(request *SectorRequest, filterLi
 
 var lotusSealingWorkers *SealingWorkers
 
-func IntWorerList(scheduler *scheduler) {
+func InitWorerList(scheduler *scheduler) {
 	lotusSealingWorkers = new(SealingWorkers)
 
 	lotusSealingWorkers.Locker = new(sync.RWMutex)
@@ -594,9 +631,11 @@ func IntWorerList(scheduler *scheduler) {
 
 	lotusSealingWorkers.WorkerList = make(map[string]*WorkerTaskSpecs, 512)
 
-	node1 := NewWorkerTaskSpeec(scheduler, "miner-node-1", 0, 4, 2, 2, 2, 2)
+	node1 := NewWorkerTaskSpeec(scheduler, "miner-node-1", 0, 4, 2, 2,
+		2, 4, 4)
 	//node2 := NewWorkerTaskSpeec(scheduler, "worker-node-1", 4, 4, 2, 2, 2, 2)
-	node3 := NewWorkerTaskSpeec(scheduler, "worker-node-2", 1, 4, 2, 2, 2, 2)
+	node3 := NewWorkerTaskSpeec(scheduler, "worker-node-2", 1, 4, 2, 2,
+		2, 4, 4)
 
 	lotusSealingWorkers.WorkerList[node1.Hostname] = node1
 	//lotusSealingWorkers.WorkerList[node2.Hostname] = node2
@@ -764,6 +803,9 @@ func (sh *scheduler) doSched() {
 
 			// 如果任务曾经在worker上执行
 			if len(hostname) > 0 {
+				// 但如果该worker上任务数量已满，就从worker列表中选择一个没有满的worker.
+				// 如果所有worker上列表已经满，且不是PC1任务，就选择曾经运行过得worker.
+
 				// 找到合适的worker
 				bestWorkerName = hostname
 				log.Infof("^^^^^^^^ doSched() -> 任务 [%v] 在Worker [%v] 上曾经运行过，继续选择该Worker.\n",
@@ -777,6 +819,8 @@ func (sh *scheduler) doSched() {
 					log.Infof("^^^^^^^^ doSched() -> 任务 [%v] 在数据库中记录在Worker [%v] 上运行过，继续选择该Worker.\n",
 						DumpRequest(workeRequest), bestWorkerName)
 				} else {
+					log.Infof("^^^^^^^^ oSched() -> 任务 [%v] 使用过滤器: [%v] 查询数量最小的Worker. ",
+						DumpRequest(workeRequest), invalidWorkerList)
 					// 如果找不到就找最小任务数量的worker，同时应用过滤器，过滤掉不符合规则的worker.
 					bestWorkerName, err = lotusSealingWorkers.GetMinTaskWorker(workeRequest, invalidWorkerList)
 					if err == ErrorNoAvaiableWorker {
@@ -858,7 +902,7 @@ type SchedDiagInfo struct {
 }
 
 func (sh *scheduler) runSched() {
-	IntWorerList(sh)
+	InitWorerList(sh)
 	go sh.doSched()
 
 	defer close(sh.closed)

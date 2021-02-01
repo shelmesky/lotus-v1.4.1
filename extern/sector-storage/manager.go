@@ -3,17 +3,15 @@ package sectorstorage
 import (
 	"context"
 	"errors"
-	"io"
-	"net/http"
-	"sync"
-	"time"
-
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-multierror"
 	"github.com/ipfs/go-cid"
 	logging "github.com/ipfs/go-log/v2"
 	"github.com/mitchellh/go-homedir"
 	"golang.org/x/xerrors"
+	"io"
+	"net/http"
+	"sync"
 
 	"github.com/filecoin-project/go-state-types/abi"
 	"github.com/filecoin-project/go-statestore"
@@ -388,7 +386,6 @@ func (m *Manager) SealPreCommit1(ctx context.Context, sector storage.SectorRef, 
 		if err != nil {
 			return err
 		}
-		time.Sleep(30 * time.Second)
 
 		waitRes()
 		return nil
