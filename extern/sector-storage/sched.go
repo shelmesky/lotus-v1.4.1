@@ -445,12 +445,14 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 
 		// 寻找所有执行过的扇区任务中，是否包含新扇区任务。
 		newTaskExecuted := false
-		for idx := range executedReqList {
-			executedReq := executedReqList[idx]
-			if executedReq.Sector.ID.Number == sectorReq.Sector.ID.Number &&
-				executedReq.TaskType == sectorReq.TaskType {
-				newTaskExecuted = true
-				break
+		if sectorReq != nil {
+			for idx := range executedReqList {
+				executedReq := executedReqList[idx]
+				if executedReq.Sector.ID.Number == sectorReq.Sector.ID.Number &&
+					executedReq.TaskType == sectorReq.TaskType {
+					newTaskExecuted = true
+					break
+				}
 			}
 		}
 
