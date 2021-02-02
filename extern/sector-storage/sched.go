@@ -1,6 +1,7 @@
 package sectorstorage
 
 import (
+	"container/list"
 	"context"
 	"encoding/json"
 	"errors"
@@ -224,6 +225,7 @@ type WorkerTaskSpecs struct {
 	MaxFetch        int
 	RequestSignal   chan *SectorRequest                        // 接收任务的队列
 	RequestQueueMap map[sealtasks.TaskType]chan *SectorRequest // 每种任务类型对应的队列
+	PendingList     *list.List                                 // 收集无法执行的任务，保存到这个队列
 	StopChan        chan bool                                  // 接收停止信号的channel
 	Locker          *sync.Mutex                                // 互斥锁
 	Scheduler       *scheduler                                 // 全局调度器
@@ -254,6 +256,8 @@ func NewWorkerTaskSpeec(sh *scheduler, hostname string, maxAP, maxPC1, maxPC2, m
 		workerSpece.RequestQueueMap[taskType] = make(chan *SectorRequest, 512)
 	}
 
+	workerSpece.PendingList = list.New()
+
 	workerSpece.StopChan = make(chan bool)
 	workerSpece.Scheduler = sh
 
@@ -265,15 +269,19 @@ func NewWorkerTaskSpeec(sh *scheduler, hostname string, maxAP, maxPC1, maxPC2, m
 func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 	log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始运行...", workerSpec.Hostname)
 	for {
+		var sectorReq *SectorRequest
 		hasTask := false
 		select {
-		case req := <-workerSpec.RequestSignal:
-			workerSpec.RequestQueueMap[req.TaskType] <- req
+		case sectorReq = <-workerSpec.RequestSignal:
+			workerSpec.RequestQueueMap[sectorReq.TaskType] <- sectorReq
 			hasTask = true
-			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 获取到任务 [%v]\n", workerSpec.Hostname, DumpRequest(req))
+			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 获取到任务 [%v]\n",
+				workerSpec.Hostname, DumpRequest(sectorReq))
+
 		case <-workerSpec.StopChan:
 			log.Warnf("Worker: [%v] runWorkerTaskLoop() 退出!\n", workerSpec.Hostname)
 			return
+
 		case <-time.After(10 * time.Second):
 			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 定时器到期...", workerSpec.Hostname)
 		}
@@ -391,10 +399,23 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 			lotusSealingWorkers.SaveWorkTaskAssign(req, workerSpec.Hostname)
 			log.Debugf("^^^^^^^^ Worker[%v] -> runWorkerTaskLoop() 保存扇区 [%v] 记录\n",
 				workerSpec.Hostname, req.Sector.ID)
+
+			var next *list.Element
+			for e := workerSpec.PendingList.Front(); e != nil; e = next {
+				value := e.Value.(*SectorRequest)
+				if value == req {
+					log.Debugf("^^^^^^^ Worker[%v] -> runWorkerTaskLoop() -> "+
+						"PendingList: 删除任务: [%v]\n", DumpRequest(req))
+					workerSpec.PendingList.Remove(e)
+				}
+				next = e.Next()
+			}
 		} else {
 			if hasTask {
-				log.Warnf("^^^^^^^^ Worker[%v] -> runWorkerTaskLoop() 接收到任务 [%v]，但是任务数量已满，暂未执行.",
-					workerSpec.Hostname, DumpRequest(req))
+				workerSpec.PendingList.PushBack(sectorReq) // 将任务放在挂起队列中
+				log.Warnf("^^^^^^^^ Worker[%v] -> runWorkerTaskLoop() 接收到任务 [%v]，"+
+					"但是任务数量已满，放入挂起队列，暂未执行.",
+					workerSpec.Hostname, DumpRequest(sectorReq))
 			}
 		}
 
@@ -407,7 +428,8 @@ func (workerSpec *WorkerTaskSpecs) runTask(request *SectorRequest) {
 	hostname := workerSpec.Hostname
 	sh := workerSpec.Scheduler
 
-	log.Debugf("^^^^^^^^ Worker:[%v] -> runTask()：获取到最优的Worker: [%v]\n", workerSpec.Hostname, hostname)
+	log.Debugf("^^^^^^^^ 任务：[%v] Worker:[%v] -> runTask()：获取到最优的Worker: [%v]\n",
+		DumpRequest(request), workerSpec.Hostname, hostname)
 
 	var workerID WorkerID
 	var Worker *workerHandle
@@ -421,42 +443,38 @@ func (workerSpec *WorkerTaskSpecs) runTask(request *SectorRequest) {
 			if w.info.Hostname == hostname {
 				Worker = w
 				sh.workersLk.Unlock()
-				log.Debugf("^^^^^^^^ Worker:[%v] -> runTask()：最优Worker [%v]　在线!\n", workerSpec.Hostname,
-					w.info.Hostname)
+				log.Debugf("^^^^^^^^ 任务：[%v] Worker:[%v] -> runTask()：最优Worker [%v]　在线!\n",
+					DumpRequest(request), workerSpec.Hostname, w.info.Hostname)
 				goto Run
 			}
 		}
 
 		sh.workersLk.Unlock()
 		if Worker == nil {
-			log.Debugf("^^^^^^^^ Worker:[%v] -> runTask()：最优Worker [%v]　离线，等待Worker上线!\n",
-				workerSpec.Hostname, hostname)
+			log.Debugf("^^^^^^^^ 任务: [%v] Worker:[%v] -> runTask()：最优Worker [%v]　离线，等待Worker上线!\n",
+				DumpRequest(request), workerSpec.Hostname, hostname)
 			time.Sleep(time.Second * 3)
 		}
 	}
 
 Run:
 
-	log.Debugf("^^^^^^^^ Worker:[%v] -> runTask()：扇区 [%v] 任务类型 [%v] 已经调度到 Worker [%v]上执行。\n",
-		workerSpec.Hostname, request.Sector.ID.Number, request.TaskType, Worker.info.Hostname)
+	log.Debugf("^^^^^^^^ Worker:[%v] -> runTask(): 任务: [%v] 已经调度到 Worker [%v]上执行。\n",
+		workerSpec.Hostname, DumpRequest(request), Worker.info.Hostname)
 
 	workFunc := func(ret chan workerResponse) {
-		// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! //
-		if request.TaskType == sealtasks.TTAddPiece {
-			time.Sleep(time.Second * 20)
-		}
 
 		err := request.Prepare(context.TODO(), sh.workTracker.worker(workerID, Worker.workerRpc))
 		if err != nil {
-			log.Errorf("^^^^^^^^ Worker:[%v] -> runTask() Prepare函数执行失败: [%v] type: [%v] on worker [%v] faield: [%v]\n",
-				workerSpec.Hostname, request.Sector.ID, request.TaskType, Worker.info.Hostname, err)
+			log.Errorf("^^^^^^^^ 任务：[%v] Worker:[%v] -> runTask() Prepare 函数执行失败 [%v]\n",
+				DumpRequest(request), workerSpec.Hostname, err)
 			ret <- workerResponse{err: err}
 		}
 
 		err = request.Work(context.TODO(), sh.workTracker.worker(workerID, Worker.workerRpc))
 		if err != nil {
-			log.Errorf("^^^^^^^^ Worker:[%v] -> runTask(): Work函数　执行结果失败: [%v] type: [%v] on worker [%v] faield: [%v]\n",
-				workerSpec.Hostname, request.Sector.ID, request.TaskType, Worker.info.Hostname, err)
+			log.Errorf("^^^^^^^^ 任务：[%v] Worker:[%v] -> runTask() Work 函数执行失败 [%v]\n",
+				DumpRequest(request), workerSpec.Hostname, err)
 		}
 
 		// 任务完成后，计数器减一
@@ -483,8 +501,8 @@ Run:
 
 	}
 
-	log.Debugf("^^^^^^^^ Worker:[%v] -> runTask() 执行扇区任务: Worker[%v] for sector[%v]\n",
-		workerSpec.Hostname, Worker.info.Hostname, request.Sector.ID)
+	log.Debugf("^^^^^^^^ 任务：[%v] Worker:[%v] -> runTask() 执行扇区任务。\n",
+		DumpRequest(request), workerSpec.Hostname)
 
 	go workFunc(request.RetChan)
 }

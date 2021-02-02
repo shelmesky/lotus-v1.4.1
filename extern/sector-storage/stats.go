@@ -43,11 +43,7 @@ func (m *Manager) WorkerJobs() map[uuid.UUID][]storiface.WorkerJob {
 		} else {
 			t.job.Hostname = "unkonw"
 		}
-		//hostname := sectorInWorker[t.job.Sector.Number]
-		//t.job.Hostname = hostname
 		out[uuid.UUID(t.worker)] = append(out[uuid.UUID(t.worker)], t.job)
-		//log.Infof("^^^^^^^^ 11111111 ID: [%v], Sector: [%v], Task: [%v], Hostname: [%v], Start: [%v]\n",
-		//t.job.ID, t.job.Sector.Number, t.job.Task, t.job.Hostname, t.job.Start)
 		calls[t.job.ID] = struct{}{}
 	}
 
