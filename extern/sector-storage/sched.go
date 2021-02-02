@@ -270,11 +270,9 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 	log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始运行...", workerSpec.Hostname)
 	for {
 		var sectorReq *SectorRequest
-		hasTask := false
 		select {
 		case sectorReq = <-workerSpec.RequestSignal:
 			workerSpec.RequestQueueMap[sectorReq.TaskType] <- sectorReq
-			hasTask = true
 			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 获取到任务 [%v]\n",
 				workerSpec.Hostname, DumpRequest(sectorReq))
 
@@ -288,16 +286,17 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 
 		workerSpec.Locker.Lock()
 
-		var req *SectorRequest
+		var executedReqList []*SectorRequest // 收集每次循环执行的任务
 
 		// AddPiece
 		if workerSpec.CurrentAP < workerSpec.MaxAP {
 			queue := workerSpec.RequestQueueMap[sealtasks.TTAddPiece]
 			if len(queue) > 0 {
-				req = <-queue
+				req := <-queue
 				go workerSpec.runTask(req)
 				workerSpec.CurrentAP += 1
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n", workerSpec.Hostname, DumpRequest(req))
+				executedReqList = append(executedReqList, req)
 			}
 		} else {
 			log.Warnf("^^^^^^^^ !!! Worker:[%v] AddPiece 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
@@ -308,11 +307,12 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 		if workerSpec.CurrentPC1 < workerSpec.MaxPC1 {
 			queue := workerSpec.RequestQueueMap[sealtasks.TTPreCommit1]
 			if len(queue) > 0 {
-				req = <-queue
+				req := <-queue
 				go workerSpec.runTask(req)
 				workerSpec.CurrentPC1 += 1
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
 					workerSpec.Hostname, DumpRequest(req))
+				executedReqList = append(executedReqList, req)
 			}
 		} else {
 			log.Warnf("^^^^^^^^ !!! Worker:[%v] PreCommit1 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
@@ -323,11 +323,12 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 		if workerSpec.CurrentPC2 < workerSpec.MaxPC2 {
 			queue := workerSpec.RequestQueueMap[sealtasks.TTPreCommit2]
 			if len(queue) > 0 {
-				req = <-queue
+				req := <-queue
 				go workerSpec.runTask(req)
 				workerSpec.CurrentPC2 += 1
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
 					workerSpec.Hostname, DumpRequest(req))
+				executedReqList = append(executedReqList, req)
 			}
 		} else {
 			log.Warnf("^^^^^^^^ !!! Worker:[%v] PreCommit2 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
@@ -338,11 +339,12 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 		if workerSpec.CurrentC1 < workerSpec.MaxC1 {
 			queue := workerSpec.RequestQueueMap[sealtasks.TTCommit1]
 			if len(queue) > 0 {
-				req = <-queue
+				req := <-queue
 				go workerSpec.runTask(req)
 				workerSpec.CurrentC1 += 1
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
 					workerSpec.Hostname, DumpRequest(req))
+				executedReqList = append(executedReqList, req)
 			}
 		} else {
 			log.Warnf("^^^^^^^^ !!! Worker:[%v] Commit1 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
@@ -353,11 +355,12 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 		if workerSpec.CurrentC2 < workerSpec.MaxC2 {
 			queue := workerSpec.RequestQueueMap[sealtasks.TTCommit2]
 			if len(queue) > 0 {
-				req = <-queue
+				req := <-queue
 				go workerSpec.runTask(req)
 				workerSpec.CurrentC2 += 1
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
 					workerSpec.Hostname, DumpRequest(req))
+				executedReqList = append(executedReqList, req)
 			}
 		} else {
 			log.Warnf("^^^^^^^^ !!! Worker:[%v] Commit2 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
@@ -373,6 +376,7 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 				workerSpec.CurrentFinalize += 1
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
 					workerSpec.Hostname, DumpRequest(req))
+				executedReqList = append(executedReqList, req)
 			}
 		} else {
 			log.Warnf("^^^^^^^^ !!! Worker:[%v] Finalize 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
@@ -388,35 +392,52 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 				workerSpec.CurrentFetch += 1
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
 					workerSpec.Hostname, DumpRequest(req))
+				executedReqList = append(executedReqList, req)
 			}
 		} else {
 			log.Warnf("^^^^^^^^ !!! Worker:[%v] Fetch 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
 				workerSpec.Hostname, workerSpec.CurrentFetch, workerSpec.MaxFetch)
 		}
 
-		// 记录扇区在本worker上执行过
-		if req != nil {
-			lotusSealingWorkers.SaveWorkTaskAssign(req, workerSpec.Hostname)
-			log.Debugf("^^^^^^^^ Worker[%v] -> runWorkerTaskLoop() 保存扇区 [%v] 记录\n",
-				workerSpec.Hostname, req.Sector.ID)
+		// 1. 将所有执行过的扇区任务，记录到扇区对应的worker。
+		// 2. 在worker的PendingList中删除执行过的扇区任务。
+		if len(executedReqList) > 0 {
+			for idx := range executedReqList {
+				executedReq := executedReqList[idx]
+				lotusSealingWorkers.SaveWorkTaskAssign(executedReq, workerSpec.Hostname)
+				log.Debugf("^^^^^^^^ Worker[%v] -> runWorkerTaskLoop() 保存扇区 [%v] 记录\n",
+					workerSpec.Hostname, executedReq.Sector.ID)
 
-			var next *list.Element
-			for e := workerSpec.PendingList.Front(); e != nil; e = next {
-				value := e.Value.(*SectorRequest)
-				if value == req {
-					log.Debugf("^^^^^^^ Worker[%v] -> runWorkerTaskLoop() -> "+
-						"PendingList: 删除任务: [%v]\n", DumpRequest(req))
-					workerSpec.PendingList.Remove(e)
+				var next *list.Element
+				for e := workerSpec.PendingList.Front(); e != nil; e = next {
+					value := e.Value.(*SectorRequest)
+					next = e.Next()
+					if value.Sector.ID == executedReq.Sector.ID && value.TaskType == executedReq.TaskType {
+						log.Debugf("^^^^^^^ Worker[%v] -> runWorkerTaskLoop() -> "+
+							"PendingList: 删除任务: [%v]\n", workerSpec.Hostname, DumpRequest(executedReq))
+						workerSpec.PendingList.Remove(e)
+					}
 				}
-				next = e.Next()
 			}
-		} else {
-			if hasTask {
-				workerSpec.PendingList.PushBack(sectorReq) // 将任务放在挂起队列中
-				log.Warnf("^^^^^^^^ Worker[%v] -> runWorkerTaskLoop() 接收到任务 [%v]，"+
-					"但是任务数量已满，放入挂起队列，暂未执行.",
-					workerSpec.Hostname, DumpRequest(sectorReq))
+		}
+
+		// 寻找所有执行过的扇区任务中，是否包含新扇区任务。
+		newTaskExecuted := false
+		for idx := range executedReqList {
+			executedReq := executedReqList[idx]
+			if executedReq.Sector.ID.Number == sectorReq.Sector.ID.Number &&
+				executedReq.TaskType == sectorReq.TaskType {
+				newTaskExecuted = true
+				break
 			}
+		}
+
+		// 如果新扇区任务未执行，就将任务放在PendingList中。
+		if !newTaskExecuted && sectorReq != nil {
+			workerSpec.PendingList.PushBack(sectorReq) // 将任务放在挂起队列中
+			log.Warnf("^^^^^^^^ Worker[%v] -> runWorkerTaskLoop() 接收到任务 [%v]，"+
+				"但是任务数量已满，放入挂起队列，暂未执行.",
+				workerSpec.Hostname, DumpRequest(sectorReq))
 		}
 
 		workerSpec.Locker.Unlock()
@@ -463,6 +484,9 @@ Run:
 		workerSpec.Hostname, DumpRequest(request), Worker.info.Hostname)
 
 	workFunc := func(ret chan workerResponse) {
+		if request.TaskType == sealtasks.TTAddPiece {
+			time.Sleep(20 * time.Second)
+		}
 
 		err := request.Prepare(context.TODO(), sh.workTracker.worker(workerID, Worker.workerRpc))
 		if err != nil {
