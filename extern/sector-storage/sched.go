@@ -508,7 +508,7 @@ Run:
 	workFunc := func(ret chan workerResponse) {
 		// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! //
 		if request.TaskType == sealtasks.TTAddPiece {
-			time.Sleep(1200 * time.Second)
+			time.Sleep(5 * time.Second)
 		}
 
 		err := request.Prepare(context.TODO(), sh.workTracker.worker(workerID, Worker.workerRpc))
