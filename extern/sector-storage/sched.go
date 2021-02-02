@@ -208,6 +208,7 @@ var taskTypeList []sealtasks.TaskType = []sealtasks.TaskType{
 
 // 定义worker的任务相关属性
 type WorkerTaskSpecs struct {
+	ID              WorkerID
 	Hostname        string
 	CurrentAP       int
 	MaxAP           int
@@ -227,7 +228,7 @@ type WorkerTaskSpecs struct {
 	RequestQueueMap map[sealtasks.TaskType]chan *SectorRequest // 每种任务类型对应的队列
 	PendingList     *list.List                                 // 收集无法执行的任务，保存到这个队列
 	StopChan        chan bool                                  // 接收停止信号的channel
-	Locker          *sync.Mutex                                // 互斥锁
+	Locker          *sync.RWMutex                              // 互斥锁
 	Scheduler       *scheduler                                 // 全局调度器
 }
 
@@ -236,7 +237,7 @@ func NewWorkerTaskSpeec(sh *scheduler, hostname string, maxAP, maxPC1, maxPC2, m
 
 	var workerSpece WorkerTaskSpecs
 
-	workerSpece.Locker = new(sync.Mutex)
+	workerSpece.Locker = new(sync.RWMutex)
 
 	workerSpece.Hostname = hostname
 	workerSpece.MaxAP = maxAP
@@ -264,6 +265,27 @@ func NewWorkerTaskSpeec(sh *scheduler, hostname string, maxAP, maxPC1, maxPC2, m
 	go workerSpece.runWorkerTaskLoop()
 
 	return &workerSpece
+}
+
+func (workerSpec *WorkerTaskSpecs) GetPendingList() []storiface.WorkerJob {
+	var jobList []storiface.WorkerJob
+
+	workerSpec.Locker.RLock()
+	defer workerSpec.Locker.RUnlock()
+
+	var next *list.Element
+	for e := workerSpec.PendingList.Front(); e != nil; e = next {
+		var job storiface.WorkerJob
+		value := e.Value.(*SectorRequest)
+		next = e.Next()
+		job.Hostname = workerSpec.Hostname
+		job.Sector = value.Sector.ID
+		job.Task = value.TaskType
+		job.RunWait = 2
+		jobList = append(jobList, job)
+	}
+
+	return jobList
 }
 
 func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
@@ -484,8 +506,9 @@ Run:
 		workerSpec.Hostname, DumpRequest(request), Worker.info.Hostname)
 
 	workFunc := func(ret chan workerResponse) {
+		// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! //
 		if request.TaskType == sealtasks.TTAddPiece {
-			time.Sleep(20 * time.Second)
+			time.Sleep(1200 * time.Second)
 		}
 
 		err := request.Prepare(context.TODO(), sh.workTracker.worker(workerID, Worker.workerRpc))
@@ -824,11 +847,27 @@ func (sh *scheduler) doSched() {
 			return
 		}
 
+		hasSetWorkerID := 0
 		for {
 			if len(sh.workers) != len(lotusSealingWorkers.WorkerList) {
 				time.Sleep(3 * time.Second)
-				log.Debugf("^^^^^^^^ doSched() -> 等待所有Worker上线...\n")
+				log.Debugf("^^^^^^^^ doSched() -> Worker总数量: [%d]，实际上线 [%d]，等待所有Worker上线...\n",
+					len(lotusSealingWorkers.WorkerList), len(sh.workers))
 			} else {
+				if hasSetWorkerID != len(lotusSealingWorkers.WorkerList) {
+					// 设置所有需要调度的虚拟Worker的WorkerID
+					for _, virtualWorker := range lotusSealingWorkers.WorkerList {
+						for workerID, workerHandler := range sh.workers {
+							if virtualWorker.Hostname == workerHandler.info.Hostname {
+								virtualWorker.ID = workerID
+								log.Debugf("^^^^^^^^ -> doSched() 设置Worker [%v] 的ID为 [%v]\n",
+									virtualWorker.Hostname, virtualWorker.ID)
+								hasSetWorkerID += 1
+								break
+							}
+						}
+					}
+				}
 				log.Debugf("^^^^^^^^ doSched() -> 所有Worker已上线...\n")
 				break
 			}
@@ -860,11 +899,12 @@ func (sh *scheduler) doSched() {
 
 		} else {
 
-			// 根据selector过滤器选择正确的worker
 			sh.workersLk.RLock()
 			log.Debugf("^^^^^^^^ doSched() -> 任务[%v] 开始执行过滤器，Worker数量：[%d]\n",
 				DumpRequest(workeRequest), len(sh.workers))
 
+			// 根据selector过滤器选择正确的worker
+			// 将不满足过滤器的worker收集到列表中
 			var invalidWorkerList []string
 			for idx := range sh.workers {
 				workerHander := sh.workers[idx]
@@ -920,6 +960,7 @@ func (sh *scheduler) doSched() {
 						hostname = tempName
 						log.Warnf("^^^^^^^^ doSched() -> 任务 [%v] 找到了数量更少的Worker[%v].\n",
 							DumpRequest(workeRequest), hostname)
+
 					} else {
 						minTaskWorker, err := lotusSealingWorkers.GetMinTaskWorker(workeRequest, []string{})
 						if err == ErrorNoAvaiableWorker {
@@ -936,6 +977,7 @@ func (sh *scheduler) doSched() {
 				bestWorkerName = hostname
 				log.Infof("^^^^^^^^ doSched() -> 任务 [%v] 在Worker [%v] 上曾经运行过，继续选择该Worker.\n",
 					DumpRequest(workeRequest), bestWorkerName)
+
 			} else {
 				// 任务从来未在任何worker上运行过
 				// 尝试在m.work中查找之前保存过的worker和任务分配记录
@@ -944,15 +986,20 @@ func (sh *scheduler) doSched() {
 					bestWorkerName = oldWorker
 					log.Infof("^^^^^^^^ doSched() -> 任务 [%v] 在数据库中记录在Worker [%v] 上运行过，继续选择该Worker.\n",
 						DumpRequest(workeRequest), bestWorkerName)
+
 				} else {
+					// 如果在m.work中未找到分配记录
+					// 就在所有worker中寻找任务数量最小的那个
 					log.Infof("^^^^^^^^ oSched() -> 任务 [%v] 使用过滤器: [%v] 查询数量最小的Worker. ",
 						DumpRequest(workeRequest), invalidWorkerList)
+
 					// 如果找不到就找最小任务数量的worker，同时应用过滤器，过滤掉不符合规则的worker.
 					bestWorkerName, err = lotusSealingWorkers.GetMinTaskWorker(workeRequest, invalidWorkerList)
 					if err == ErrorNoAvaiableWorker {
 						log.Errorf("^^^^^^^^ doSched() -> 任务 [%v] 无法找到合适的worker\n",
 							DumpRequest(workeRequest))
 					}
+
 					log.Infof("^^^^^^^^ doSched() -> 任务 [%v] 从未在任何Worker上运行过，选择任务数最小的Worker [%v] 运行.\n",
 						DumpRequest(workeRequest), bestWorkerName)
 				}

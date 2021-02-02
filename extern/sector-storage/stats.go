@@ -47,6 +47,14 @@ func (m *Manager) WorkerJobs() map[uuid.UUID][]storiface.WorkerJob {
 		calls[t.job.ID] = struct{}{}
 	}
 
+	for _, worker := range lotusSealingWorkers.WorkerList {
+		jobList := worker.GetPendingList()
+		for idx := range jobList {
+			job := jobList[idx]
+			out[uuid.UUID(worker.ID)] = append(out[uuid.UUID(worker.ID)], job)
+		}
+	}
+
 	return out
 
 	m.sched.workersLk.RLock()
