@@ -619,8 +619,10 @@ func (workers *SealingWorkers) GetSectorWorker(request *SectorRequest) string {
 }
 
 /*
+获取当前的Worker列表：
+
 1. 过滤掉任务数量是0的worker.
-2. 过滤掉不满足条件的worker.
+2. 过滤掉不满足条件的worker(selector选择器).
 */
 func (workers *SealingWorkers) GetWorkerList(request *SectorRequest, filterList []string) []*WorkerTaskSpecs {
 	var workerList []*WorkerTaskSpecs
@@ -697,30 +699,31 @@ func (workers *SealingWorkers) GetWorkerList(request *SectorRequest, filterList 
 func (workers *SealingWorkers) GetMinTaskWorker(request *SectorRequest, filterList []string) (string, error) {
 	var sortByValue ByValue
 
-	// 将某些workeru过滤掉
+	// 将某些worker按照Schedule中传递来的selector过滤掉
 	workerList := workers.GetWorkerList(request, filterList)
 
 	for idx := range workerList {
-		v := workerList[idx]
+		worker := workerList[idx]
 
 		var sortItem SortStruct
-		sortItem.Hostname = v.Hostname
+		sortItem.Hostname = worker.Hostname
 
+		// 每个类型任务的总数等于：当前正在执行的任务数 + 在等待队列中的任务数
 		switch request.TaskType {
 		case sealtasks.TTAddPiece:
-			sortItem.Value = v.CurrentAP
+			sortItem.Value = worker.CurrentAP + len(worker.RequestQueueMap[sealtasks.TTAddPiece])
 		case sealtasks.TTPreCommit1:
-			sortItem.Value = v.CurrentPC1
+			sortItem.Value = worker.CurrentPC1 + len(worker.RequestQueueMap[sealtasks.TTPreCommit1])
 		case sealtasks.TTPreCommit2:
-			sortItem.Value = v.CurrentPC2
+			sortItem.Value = worker.CurrentPC2 + len(worker.RequestQueueMap[sealtasks.TTPreCommit2])
 		case sealtasks.TTCommit1:
-			sortItem.Value = v.CurrentC1
+			sortItem.Value = worker.CurrentC1 + len(worker.RequestQueueMap[sealtasks.TTCommit1])
 		case sealtasks.TTCommit2:
-			sortItem.Value = v.CurrentC2
+			sortItem.Value = worker.CurrentC2 + len(worker.RequestQueueMap[sealtasks.TTCommit2])
 		case sealtasks.TTFinalize:
-			sortItem.Value = v.CurrentFinalize
+			sortItem.Value = worker.CurrentFinalize + len(worker.RequestQueueMap[sealtasks.TTFinalize])
 		case sealtasks.TTFetch:
-			sortItem.Value = v.CurrentFetch
+			sortItem.Value = worker.CurrentFetch + len(worker.RequestQueueMap[sealtasks.TTFetch])
 		}
 
 		sortByValue = append(sortByValue, sortItem)
@@ -947,6 +950,7 @@ func (sh *scheduler) doSched() {
 					log.Warnf("^^^^^^^^ doSched() -> 任务 [%v] 找到了之前曾经运行的 Worker[%v],"+
 						"但是该Worker任务数量过多，尝试寻找未超过数量的Worker.\n", DumpRequest(workeRequest), hostname)
 
+					// 检查是否所有的worker的任务数都已满
 					var tempName string
 					foundAvaiable := false
 					for i := 0; i < len(lotusSealingWorkers.WorkerList); i++ {
@@ -958,12 +962,14 @@ func (sh *scheduler) doSched() {
 						}
 					}
 
+					// 如果不是所有worker的任务数都已满，也就是说有未满的worker.
 					if foundAvaiable {
 						hostname = tempName
 						log.Warnf("^^^^^^^^ doSched() -> 任务 [%v] 找到了数量更少的Worker[%v].\n",
 							DumpRequest(workeRequest), hostname)
 
 					} else {
+						// 如果所有worker的任务数量都已满，就寻找其中最小的。
 						minTaskWorker, err := lotusSealingWorkers.GetMinTaskWorker(workeRequest, []string{})
 						if err == ErrorNoAvaiableWorker {
 							log.Errorf("^^^^^^^^ doSched() -> 任务 [%v] 无法找到合适的worker\n",
@@ -975,13 +981,15 @@ func (sh *scheduler) doSched() {
 					}
 				}
 
-				// 找到合适的worker
+				// 找到了worker：
+				// 这个worker可能是曾经运行该扇区的worker，
+				// 也可能是其他worker.
 				bestWorkerName = hostname
 				log.Infof("^^^^^^^^ doSched() -> 任务 [%v] 在Worker [%v] 上曾经运行过，继续选择该Worker.\n",
 					DumpRequest(workeRequest), bestWorkerName)
 
 			} else {
-				// 任务从来未在任何worker上运行过
+				// 扇区任务从未在任何worker上运行过
 				// 尝试在m.work中查找之前保存过的worker和任务分配记录
 				oldWorker := sh.getSectorWorker(workeRequest.Sector.ID.Number)
 				if len(oldWorker) > 0 {
@@ -996,6 +1004,7 @@ func (sh *scheduler) doSched() {
 						DumpRequest(workeRequest), invalidWorkerList)
 
 					// 如果找不到就找最小任务数量的worker，同时应用过滤器，过滤掉不符合规则的worker.
+					// 这里的过滤规则，可以在执行某些类型的任务时，选找到包含有该扇区的worker.
 					bestWorkerName, err = lotusSealingWorkers.GetMinTaskWorker(workeRequest, invalidWorkerList)
 					if err == ErrorNoAvaiableWorker {
 						log.Errorf("^^^^^^^^ doSched() -> 任务 [%v] 无法找到合适的worker\n",
