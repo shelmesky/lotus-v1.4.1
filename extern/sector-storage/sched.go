@@ -840,7 +840,10 @@ func (sh *scheduler) getSectorWorker(sectorNumber abi.SectorNumber) string {
 	return ""
 }
 
+// 调度器循环: 从ScheduleQueue接收任务，根据规则调度到Worker的队列中。
 func (sh *scheduler) doSched() {
+
+	hasSetWorkerID := 0
 
 	for {
 
@@ -852,7 +855,6 @@ func (sh *scheduler) doSched() {
 			return
 		}
 
-		hasSetWorkerID := 0
 		for {
 			if len(sh.workers) != len(lotusSealingWorkers.WorkerList) {
 				time.Sleep(3 * time.Second)
@@ -903,6 +905,7 @@ func (sh *scheduler) doSched() {
 				DumpRequest(workeRequest), bestWorkerName)
 
 		} else {
+			// 除了AP、Fetch之外的其他任务类型: PC1、PC2、C1、C2、Finalize、Fetch
 
 			sh.workersLk.RLock()
 			log.Debugf("^^^^^^^^ doSched() -> 任务[%v] 开始执行过滤器，Worker数量：[%d]\n",
@@ -940,12 +943,20 @@ func (sh *scheduler) doSched() {
 			// 如果任务曾经在worker上执行
 			if len(hostname) > 0 {
 
-				workerList := lotusSealingWorkers.GetWorkerList(workeRequest, []string{})
+				// 如果任务不是PC1，且该worker任务数量没有满，就选择曾经运行这个任务的worker.
+				// 否则根据PC1的任务做特殊判断.
+				if !lotusSealingWorkers.GetWorkerCount(workeRequest, hostname) &&
+					workeRequest.TaskType != sealtasks.TTPreCommit1 {
 
-				// 如果任务是PC1，并且该worker上的任务数量已满，就寻找一个未满的worker.
-				// 如果未找到，就寻找所有worker中数量最小的那个.
-				if lotusSealingWorkers.GetWorkerCount(workeRequest, hostname) &&
-					workeRequest.TaskType == sealtasks.TTPreCommit1 {
+					bestWorkerName = hostname
+					log.Infof("^^^^^^^^ doSched() -> 任务 [%v] 在Worker [%v] 上曾经运行过，继续选择该Worker.\n",
+						DumpRequest(workeRequest), bestWorkerName)
+
+				} else {
+					// 如果任务是PC1，并且该worker上的任务数量已满，就寻找一个未满的worker.
+					// 如果未找到，就寻找所有worker中数量最小的那个.
+
+					workerList := lotusSealingWorkers.GetWorkerList(workeRequest, []string{})
 
 					log.Warnf("^^^^^^^^ doSched() -> 任务 [%v] 找到了之前曾经运行的 Worker[%v],"+
 						"但是该Worker任务数量过多，尝试寻找未超过数量的Worker.\n", DumpRequest(workeRequest), hostname)
@@ -980,13 +991,6 @@ func (sh *scheduler) doSched() {
 							"只能寻找其中最小数量的Worker[%v]\n", DumpRequest(workeRequest), hostname)
 					}
 				}
-
-				// 找到了worker：
-				// 这个worker可能是曾经运行该扇区的worker，
-				// 也可能是其他worker.
-				bestWorkerName = hostname
-				log.Infof("^^^^^^^^ doSched() -> 任务 [%v] 在Worker [%v] 上曾经运行过，继续选择该Worker.\n",
-					DumpRequest(workeRequest), bestWorkerName)
 
 			} else {
 				// 扇区任务从未在任何worker上运行过
