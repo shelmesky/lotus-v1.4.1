@@ -938,17 +938,16 @@ func (sh *scheduler) doSched() {
 
 			// 如果是其他类型：PC1、PC2、C1、C2、Finalize
 			// 查找扇区是否曾经在某个worker上执行
-			hostname := lotusSealingWorkers.GetSectorWorker(workeRequest)
+			bestWorkerName = lotusSealingWorkers.GetSectorWorker(workeRequest)
 
 			// 如果任务曾经在worker上执行
-			if len(hostname) > 0 {
+			if len(bestWorkerName) > 0 {
 
 				// 如果任务不是PC1，且该worker任务数量没有满，就选择曾经运行这个任务的worker.
 				// 否则根据PC1的任务做特殊判断.
-				if !lotusSealingWorkers.GetWorkerCount(workeRequest, hostname) &&
+				if !lotusSealingWorkers.GetWorkerCount(workeRequest, bestWorkerName) &&
 					workeRequest.TaskType != sealtasks.TTPreCommit1 {
 
-					bestWorkerName = hostname
 					log.Infof("^^^^^^^^ doSched() -> 任务 [%v] 在Worker [%v] 上曾经运行过，继续选择该Worker.\n",
 						DumpRequest(workeRequest), bestWorkerName)
 
@@ -959,7 +958,7 @@ func (sh *scheduler) doSched() {
 					workerList := lotusSealingWorkers.GetWorkerList(workeRequest, []string{})
 
 					log.Warnf("^^^^^^^^ doSched() -> 任务 [%v] 找到了之前曾经运行的 Worker[%v],"+
-						"但是该Worker任务数量过多，尝试寻找未超过数量的Worker.\n", DumpRequest(workeRequest), hostname)
+						"但是该Worker任务数量过多，尝试寻找未超过数量的Worker.\n", DumpRequest(workeRequest), bestWorkerName)
 
 					// 检查是否所有的worker的任务数都已满
 					var tempName string
@@ -975,9 +974,9 @@ func (sh *scheduler) doSched() {
 
 					// 如果不是所有worker的任务数都已满，也就是说有未满的worker.
 					if foundAvaiable {
-						hostname = tempName
+						bestWorkerName = tempName
 						log.Warnf("^^^^^^^^ doSched() -> 任务 [%v] 找到了数量更少的Worker[%v].\n",
-							DumpRequest(workeRequest), hostname)
+							DumpRequest(workeRequest), bestWorkerName)
 
 					} else {
 						// 如果所有worker的任务数量都已满，就寻找其中最小的。
@@ -986,9 +985,9 @@ func (sh *scheduler) doSched() {
 							log.Errorf("^^^^^^^^ doSched() -> 任务 [%v] 无法找到合适的worker\n",
 								DumpRequest(workeRequest))
 						}
-						hostname = minTaskWorker
+						bestWorkerName = minTaskWorker
 						log.Warnf("^^^^^^^^ doSched() -> 任务 [%v] 所有的Worker数量已满"+
-							"只能寻找其中最小数量的Worker[%v]\n", DumpRequest(workeRequest), hostname)
+							"只能寻找其中最小数量的Worker[%v]\n", DumpRequest(workeRequest), bestWorkerName)
 					}
 				}
 
