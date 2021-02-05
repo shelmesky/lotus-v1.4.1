@@ -554,7 +554,7 @@ Run:
 			log.Errorf("^^^^^^^^ 任务：[%v] Worker:[%v] -> runTask()：获取GPU BusID错误: [%v]\n",
 				DumpRequest(request), workerSpec.Hostname, err)
 		} else {
-			os.Setenv("", fmt.Sprintf("%d", gpuBusID))
+			os.Setenv("NEPTUNE_DEFAULT_GPU", fmt.Sprintf("%d", gpuBusID))
 			log.Debugf("^^^^^^^ 任务：[%v] Worker:[%v] -> runTask()：使用了GPU: [%d]\n",
 				DumpRequest(request), workerSpec.Hostname, gpuBusID)
 		}
