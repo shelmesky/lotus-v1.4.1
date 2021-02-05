@@ -810,13 +810,13 @@ func InitWorerList(scheduler *scheduler) {
 
 	lotusSealingWorkers.WorkerList = make(map[string]*WorkerTaskSpecs, 512)
 
-	node1 := NewWorkerTaskSpeec(scheduler, "miner-node-1", 0, 2, 1, 1,
-		1, 2, 2)
+	node1 := NewWorkerTaskSpeec(scheduler, "miner-node-1", 0, 4, 2, 2,
+		2, 2, 2)
 
 	node1.InitGPURes("1", "33")
 
-	node2 := NewWorkerTaskSpeec(scheduler, "worker-node-2", 1, 2, 1, 1,
-		1, 2, 2)
+	node2 := NewWorkerTaskSpeec(scheduler, "worker-node-2", 1, 4, 2, 2,
+		2, 2, 2)
 
 	node2.InitGPURes("1", "33")
 
