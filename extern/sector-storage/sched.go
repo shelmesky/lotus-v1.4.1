@@ -380,7 +380,8 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 		}
 
 		// PreCommit2
-		if workerSpec.CurrentPC2 < workerSpec.MaxPC2 {
+		// 为了防止PC2和C2互相竞争使用显卡资源，确保存在C2任务的时候，PC2不启动。
+		if workerSpec.CurrentPC2 < workerSpec.MaxPC2 && workerSpec.CurrentC2 == 0 {
 			queue := workerSpec.RequestQueueMap[sealtasks.TTPreCommit2]
 			if len(queue) > 0 {
 				req := <-queue
@@ -412,7 +413,8 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 		}
 
 		// Commit2
-		if workerSpec.CurrentC2 < workerSpec.MaxC2 {
+		// 为了防止C2和PC2互相竞争使用显卡资源，确保存在PC2任务的时候，C2不启动。
+		if workerSpec.CurrentC2 < workerSpec.MaxC2 && workerSpec.CurrentPC2 == 0 {
 			queue := workerSpec.RequestQueueMap[sealtasks.TTCommit2]
 			if len(queue) > 0 {
 				req := <-queue
