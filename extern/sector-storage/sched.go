@@ -557,7 +557,7 @@ Run:
 				DumpRequest(request), workerSpec.Hostname, err)
 		} else {
 			os.Setenv("NEPTUNE_DEFAULT_GPU", fmt.Sprintf("%d", gpuBusID))
-			log.Debugf("^^^^^^^ 任务：[%v] Worker:[%v] -> runTask()：使用了GPU: [%d]\n",
+			log.Debugf("^^^^^^^ 任务：[%v] Worker:[%v] -> runTask()：使用了GPU: [%s]\n",
 				DumpRequest(request), workerSpec.Hostname, gpuBusID)
 		}
 	}
