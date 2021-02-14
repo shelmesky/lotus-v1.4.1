@@ -927,10 +927,10 @@ func (sh *scheduler) doSched() {
 		}
 
 		for {
-			if len(sh.workers) != len(lotusSealingWorkers.WorkerList) {
+			if len(sh.workers)-1 != len(lotusSealingWorkers.WorkerList) {
 				time.Sleep(3 * time.Second)
 				log.Debugf("^^^^^^^^ doSched() -> Worker总数量: [%d]，实际上线 [%d]，等待所有Worker上线...\n",
-					len(lotusSealingWorkers.WorkerList), len(sh.workers))
+					len(lotusSealingWorkers.WorkerList), len(sh.workers)-1)
 			} else {
 				if hasSetWorkerID != len(lotusSealingWorkers.WorkerList) {
 					// 设置所有需要调度的虚拟Worker的WorkerID
