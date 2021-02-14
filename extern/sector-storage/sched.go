@@ -812,25 +812,31 @@ func InitWorerList(scheduler *scheduler) {
 
 	lotusSealingWorkers.WorkerList = make(map[string]*WorkerTaskSpecs, 512)
 
-	node1 := NewWorkerTaskSpeec(scheduler, "miner-node-1", 0, 4, 2, 2,
-		2, 2, 2)
+	//node1 := NewWorkerTaskSpeec(scheduler, "miner-node-1", 0, 4, 2, 2,
+	//	2, 2, 2)
 
-	node1.InitGPURes("1", "33")
+	//node1.InitGPURes("1", "33")
 
-	node2 := NewWorkerTaskSpeec(scheduler, "worker-node-2", 1, 4, 2, 2,
+	node2 := NewWorkerTaskSpeec(scheduler, "worker-node-1", 1, 4, 2, 2,
 		2, 2, 2)
 
 	node2.InitGPURes("1", "33")
 
-	lotusSealingWorkers.WorkerList[node1.Hostname] = node1
+	node3 := NewWorkerTaskSpeec(scheduler, "worker-node-2", 0, 4, 2, 2,
+		2, 2, 2)
+
+	node3.InitGPURes("1", "33")
+
+	//lotusSealingWorkers.WorkerList[node1.Hostname] = node1
 	lotusSealingWorkers.WorkerList[node2.Hostname] = node2
+	lotusSealingWorkers.WorkerList[node3.Hostname] = node3
 
 	lotusSealingWorkers.Locker = new(sync.RWMutex)
 	lotusSealingWorkers.WorkAssignMap = make(map[abi.SectorID]string, 512)
 	lotusSealingWorkers.ScheduleQueue = make(chan *SectorRequest, 512)
 	lotusSealingWorkers.StopChan = make(chan struct{})
 
-	lotusSealingWorkers.DefaultNode = node1
+	lotusSealingWorkers.DefaultNode = node2
 }
 
 func DumpRequest(req *SectorRequest) string {
