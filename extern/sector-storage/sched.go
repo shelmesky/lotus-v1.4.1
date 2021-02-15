@@ -1034,7 +1034,7 @@ func (sh *scheduler) doSched() {
 					// 检查是否所有的worker的任务数都已满
 					var tempName string
 					foundAvaiable := false
-					for i := 0; i < len(lotusSealingWorkers.WorkerList); i++ {
+					for i := 0; i < len(workerList); i++ {
 						tempName = workerList[i].Hostname
 						overLoad := lotusSealingWorkers.GetWorkerCount(workeRequest, tempName)
 						if !overLoad {
