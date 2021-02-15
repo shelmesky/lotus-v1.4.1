@@ -812,10 +812,10 @@ func InitWorerList(scheduler *scheduler) {
 
 	lotusSealingWorkers.WorkerList = make(map[string]*WorkerTaskSpecs, 512)
 
-	//node1 := NewWorkerTaskSpeec(scheduler, "miner-node-1", 0, 4, 2, 2,
-	//	2, 2, 2)
+	node1 := NewWorkerTaskSpeec(scheduler, "miner-node-1", 0, 0, 0, 0,
+		0, 2, 2)
 
-	//node1.InitGPURes("1", "33")
+	node1.InitGPURes("1", "33")
 
 	node2 := NewWorkerTaskSpeec(scheduler, "worker-node-1", 1, 4, 2, 2,
 		2, 2, 2)
@@ -827,7 +827,7 @@ func InitWorerList(scheduler *scheduler) {
 
 	node3.InitGPURes("1", "33")
 
-	//lotusSealingWorkers.WorkerList[node1.Hostname] = node1
+	lotusSealingWorkers.WorkerList[node1.Hostname] = node1
 	lotusSealingWorkers.WorkerList[node2.Hostname] = node2
 	lotusSealingWorkers.WorkerList[node3.Hostname] = node3
 
@@ -927,10 +927,10 @@ func (sh *scheduler) doSched() {
 		}
 
 		for {
-			if len(sh.workers)-1 != len(lotusSealingWorkers.WorkerList) {
+			if len(sh.workers) != len(lotusSealingWorkers.WorkerList) {
 				time.Sleep(3 * time.Second)
 				log.Debugf("^^^^^^^^ doSched() -> Worker总数量: [%d]，实际上线 [%d]，等待所有Worker上线...\n",
-					len(lotusSealingWorkers.WorkerList), len(sh.workers)-1)
+					len(lotusSealingWorkers.WorkerList), len(sh.workers))
 			} else {
 				if hasSetWorkerID != len(lotusSealingWorkers.WorkerList) {
 					// 设置所有需要调度的虚拟Worker的WorkerID
