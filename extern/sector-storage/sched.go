@@ -836,7 +836,7 @@ func InitWorerList(scheduler *scheduler) {
 	lotusSealingWorkers.ScheduleQueue = make(chan *SectorRequest, 512)
 	lotusSealingWorkers.StopChan = make(chan struct{})
 
-	lotusSealingWorkers.DefaultNode = node2
+	lotusSealingWorkers.DefaultNode = node1
 }
 
 func DumpRequest(req *SectorRequest) string {
