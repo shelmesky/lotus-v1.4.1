@@ -344,7 +344,7 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] miner已经重启，尝试收集100个任务后开始执行。\n",
 				workerSpec.Hostname)
 
-			for i := 0; i < 100; i++ {
+			for i := 0; i < 40; i++ {
 				select {
 				case sectorReq = <-workerSpec.RequestSignal:
 					workerSpec.RequestQueueMap[sectorReq.TaskType] <- sectorReq
