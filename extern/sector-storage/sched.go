@@ -326,11 +326,22 @@ func (workerSpec *WorkerTaskSpecs) GetPendingList() []storiface.WorkerJob {
 	return jobList
 }
 
+var firstRun bool
+
 func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 	log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始运行...", workerSpec.Hostname)
 	for {
 		var sectorReq *SectorRequest
 		for {
+			var taskSleep time.Duration
+			if firstRun {
+				taskSleep = time.Duration(120)
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 第一次启动，暂停[%v]秒.\n", taskSleep)
+				firstRun = false
+			} else {
+				taskSleep = time.Duration(10)
+			}
+
 			select {
 			case sectorReq = <-workerSpec.RequestSignal:
 				workerSpec.RequestQueueMap[sectorReq.TaskType] <- sectorReq
@@ -341,7 +352,7 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 				log.Warnf("Worker: [%v] runWorkerTaskLoop() 退出!\n", workerSpec.Hostname)
 				return
 
-			case <-time.After(10 * time.Second):
+			case <-time.After(taskSleep * time.Second):
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 定时器到期，退出任务接收循环，开始执行任务......",
 					workerSpec.Hostname)
 				goto RUN
@@ -1170,6 +1181,7 @@ type SchedDiagInfo struct {
 }
 
 func (sh *scheduler) runSched() {
+	firstRun = true
 	InitWorerList(sh)
 	go sh.doSched()
 
