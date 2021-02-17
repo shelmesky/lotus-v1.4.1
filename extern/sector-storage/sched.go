@@ -284,7 +284,7 @@ func NewWorkerTaskSpeec(sh *scheduler, hostname string, maxAP, maxPC1, maxPC2, m
 
 	workerSpece.RequestSignal = make(chan *SectorRequest, 512)
 
-	workerSpece.RequestQueueMap = make(map[sealtasks.TaskType]chan *SectorRequest, 16)
+	workerSpece.RequestQueueMap = make(map[sealtasks.TaskType]chan *SectorRequest, 512)
 
 	for i := 0; i < len(taskTypeList); i++ {
 		taskType := taskTypeList[i]
@@ -356,6 +356,7 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 					return
 
 				case <-time.After(3 * time.Second):
+					log.Warnf("Worker: [%v] runWorkerTaskLoop() 尝试收集100个扇区任务!\n", workerSpec.Hostname)
 				}
 			}
 
