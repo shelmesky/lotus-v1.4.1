@@ -327,12 +327,20 @@ func (workerSpec *WorkerTaskSpecs) GetPendingList() []storiface.WorkerJob {
 }
 
 var firstRun bool
+var startDoSchedule bool
 
 func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 	log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始运行...", workerSpec.Hostname)
 	for {
+
+		if !startDoSchedule {
+			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 等待调度器开始运行.\n", workerSpec.Hostname)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
 		var sectorReq *SectorRequest
-		if firstRun {
+		if firstRun && startDoSchedule {
 			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] miner已经重启，尝试收集100个任务后开始执行。\n",
 				workerSpec.Hostname)
 
@@ -979,6 +987,8 @@ func (sh *scheduler) doSched() {
 				break
 			}
 		}
+
+		startDoSchedule = true
 
 		var bestWorkerName string
 		var err error
