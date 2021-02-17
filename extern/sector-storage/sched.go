@@ -330,86 +330,59 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 	log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始运行...", workerSpec.Hostname)
 	for {
 		var sectorReq *SectorRequest
-		select {
-		case sectorReq = <-workerSpec.RequestSignal:
-			workerSpec.RequestQueueMap[sectorReq.TaskType] <- sectorReq
-			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 获取到任务 [%v]\n",
-				workerSpec.Hostname, DumpRequest(sectorReq))
+		for {
+			select {
+			case sectorReq = <-workerSpec.RequestSignal:
+				workerSpec.RequestQueueMap[sectorReq.TaskType] <- sectorReq
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 获取到任务 [%v]\n",
+					workerSpec.Hostname, DumpRequest(sectorReq))
 
-		case <-workerSpec.StopChan:
-			log.Warnf("Worker: [%v] runWorkerTaskLoop() 退出!\n", workerSpec.Hostname)
-			return
+			case <-workerSpec.StopChan:
+				log.Warnf("Worker: [%v] runWorkerTaskLoop() 退出!\n", workerSpec.Hostname)
+				return
 
-		case <-time.After(10 * time.Second):
-			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 定时器到期...", workerSpec.Hostname)
+			case <-time.After(10 * time.Second):
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 定时器到期，退出任务接收循环，开始执行任务......",
+					workerSpec.Hostname)
+				break
+			}
 		}
 
 		workerSpec.Locker.Lock()
 
 		var executedReqList []*SectorRequest // 收集每次循环执行的任务
 
-		// AddPiece
-		if workerSpec.CurrentAP < workerSpec.MaxAP {
-			queue := workerSpec.RequestQueueMap[sealtasks.TTAddPiece]
+		/***************************************************************************/
+		// Fetch
+		if workerSpec.CurrentFetch < workerSpec.MaxFetch {
+			queue := workerSpec.RequestQueueMap[sealtasks.TTFetch]
 			if len(queue) > 0 {
 				req := <-queue
 				go workerSpec.runTask(req)
-				workerSpec.CurrentAP += 1
-				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n", workerSpec.Hostname, DumpRequest(req))
-				executedReqList = append(executedReqList, req)
-			}
-		} else {
-			log.Warnf("^^^^^^^^ !!! Worker:[%v] AddPiece 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
-				workerSpec.Hostname, workerSpec.CurrentAP, workerSpec.MaxAP)
-		}
-
-		// PreCommit1
-		if workerSpec.CurrentPC1 < workerSpec.MaxPC1 {
-			queue := workerSpec.RequestQueueMap[sealtasks.TTPreCommit1]
-			if len(queue) > 0 {
-				req := <-queue
-				go workerSpec.runTask(req)
-				workerSpec.CurrentPC1 += 1
+				workerSpec.CurrentFetch += 1
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
 					workerSpec.Hostname, DumpRequest(req))
 				executedReqList = append(executedReqList, req)
 			}
 		} else {
-			log.Warnf("^^^^^^^^ !!! Worker:[%v] PreCommit1 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
-				workerSpec.Hostname, workerSpec.CurrentPC1, workerSpec.MaxPC1)
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] Fetch 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+				workerSpec.Hostname, workerSpec.CurrentFetch, workerSpec.MaxFetch)
 		}
 
-		// PreCommit2
-		// 为了防止PC2和C2互相竞争使用显卡资源，确保存在C2任务的时候，PC2不启动。
-		if workerSpec.CurrentPC2 < workerSpec.MaxPC2 && workerSpec.CurrentC2 == 0 {
-			queue := workerSpec.RequestQueueMap[sealtasks.TTPreCommit2]
+		// Finalize
+		if workerSpec.CurrentFinalize < workerSpec.MaxFinalize {
+			queue := workerSpec.RequestQueueMap[sealtasks.TTFinalize]
 			if len(queue) > 0 {
 				req := <-queue
 				go workerSpec.runTask(req)
-				workerSpec.CurrentPC2 += 1
+				workerSpec.CurrentFinalize += 1
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
 					workerSpec.Hostname, DumpRequest(req))
 				executedReqList = append(executedReqList, req)
 			}
 		} else {
-			log.Warnf("^^^^^^^^ !!! Worker:[%v] PreCommit2 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
-				workerSpec.Hostname, workerSpec.CurrentPC2, workerSpec.MaxPC2)
-		}
-
-		// Commit1
-		if workerSpec.CurrentC1 < workerSpec.MaxC1 {
-			queue := workerSpec.RequestQueueMap[sealtasks.TTCommit1]
-			if len(queue) > 0 {
-				req := <-queue
-				go workerSpec.runTask(req)
-				workerSpec.CurrentC1 += 1
-				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
-					workerSpec.Hostname, DumpRequest(req))
-				executedReqList = append(executedReqList, req)
-			}
-		} else {
-			log.Warnf("^^^^^^^^ !!! Worker:[%v] Commit1 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
-				workerSpec.Hostname, workerSpec.CurrentC1, workerSpec.MaxC1)
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] Finalize 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+				workerSpec.Hostname, workerSpec.CurrentFinalize, workerSpec.MaxFinalize)
 		}
 
 		// Commit2
@@ -429,37 +402,71 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 				workerSpec.Hostname, workerSpec.CurrentC2, workerSpec.MaxC2)
 		}
 
-		// Finalize
-		if workerSpec.CurrentFinalize < workerSpec.MaxFinalize {
-			queue := workerSpec.RequestQueueMap[sealtasks.TTFinalize]
+		// Commit1
+		if workerSpec.CurrentC1 < workerSpec.MaxC1 {
+			queue := workerSpec.RequestQueueMap[sealtasks.TTCommit1]
 			if len(queue) > 0 {
 				req := <-queue
 				go workerSpec.runTask(req)
-				workerSpec.CurrentFinalize += 1
+				workerSpec.CurrentC1 += 1
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
 					workerSpec.Hostname, DumpRequest(req))
 				executedReqList = append(executedReqList, req)
 			}
 		} else {
-			log.Warnf("^^^^^^^^ !!! Worker:[%v] Finalize 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
-				workerSpec.Hostname, workerSpec.CurrentFinalize, workerSpec.MaxFinalize)
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] Commit1 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+				workerSpec.Hostname, workerSpec.CurrentC1, workerSpec.MaxC1)
 		}
 
-		// Fetch
-		if workerSpec.CurrentFetch < workerSpec.MaxFetch {
-			queue := workerSpec.RequestQueueMap[sealtasks.TTFetch]
+		// PreCommit2
+		// 为了防止PC2和C2互相竞争使用显卡资源，确保存在C2任务的时候，PC2不启动。
+		if workerSpec.CurrentPC2 < workerSpec.MaxPC2 && workerSpec.CurrentC2 == 0 {
+			queue := workerSpec.RequestQueueMap[sealtasks.TTPreCommit2]
 			if len(queue) > 0 {
 				req := <-queue
 				go workerSpec.runTask(req)
-				workerSpec.CurrentFetch += 1
+				workerSpec.CurrentPC2 += 1
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
 					workerSpec.Hostname, DumpRequest(req))
 				executedReqList = append(executedReqList, req)
 			}
 		} else {
-			log.Warnf("^^^^^^^^ !!! Worker:[%v] Fetch 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
-				workerSpec.Hostname, workerSpec.CurrentFetch, workerSpec.MaxFetch)
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] PreCommit2 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+				workerSpec.Hostname, workerSpec.CurrentPC2, workerSpec.MaxPC2)
 		}
+
+		// PreCommit1
+		if workerSpec.CurrentPC1 < workerSpec.MaxPC1 {
+			queue := workerSpec.RequestQueueMap[sealtasks.TTPreCommit1]
+			if len(queue) > 0 {
+				req := <-queue
+				go workerSpec.runTask(req)
+				workerSpec.CurrentPC1 += 1
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n",
+					workerSpec.Hostname, DumpRequest(req))
+				executedReqList = append(executedReqList, req)
+			}
+		} else {
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] PreCommit1 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+				workerSpec.Hostname, workerSpec.CurrentPC1, workerSpec.MaxPC1)
+		}
+
+		// AddPiece
+		if workerSpec.CurrentAP < workerSpec.MaxAP {
+			queue := workerSpec.RequestQueueMap[sealtasks.TTAddPiece]
+			if len(queue) > 0 {
+				req := <-queue
+				go workerSpec.runTask(req)
+				workerSpec.CurrentAP += 1
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始执行任务 [%v]\n", workerSpec.Hostname, DumpRequest(req))
+				executedReqList = append(executedReqList, req)
+			}
+		} else {
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] AddPiece 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+				workerSpec.Hostname, workerSpec.CurrentAP, workerSpec.MaxAP)
+		}
+
+		/***************************************************************************/
 
 		// 1. 将所有执行过的扇区任务，记录到扇区对应的worker。
 		// 2. 在worker的PendingList中删除执行过的扇区任务。
