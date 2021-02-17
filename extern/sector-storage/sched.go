@@ -344,9 +344,11 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 			case <-time.After(10 * time.Second):
 				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 定时器到期，退出任务接收循环，开始执行任务......",
 					workerSpec.Hostname)
-				break
+				goto RUN
 			}
 		}
+
+	RUN:
 
 		workerSpec.Locker.Lock()
 
