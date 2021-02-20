@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"math/bits"
 	"os"
@@ -518,6 +520,46 @@ func (sb *Sealer) SealPreCommit1(ctx context.Context, sector storage.SectorRef, 
 	return p1o, nil
 }
 
+func init() {
+	// 初始化GPU BUS ID
+	GPUManager.GPUResInit("1", "33")
+}
+
+// 管理每个worker在PC2阶段使用使用的显卡ID
+var GPUManager GPUResourceManager
+
+var ErrorNoGPUAvaiable = errors.New("Can not find any avaiable GPU.")
+var ErrorGPUPoolBlocked = errors.New("Can not put busid back.")
+
+type GPUResourceManager struct {
+	GPUBusIDList chan string
+}
+
+func (gpuManager *GPUResourceManager) GPUResInit(BusIDList ...string) {
+	gpuManager.GPUBusIDList = make(chan string, len(BusIDList))
+	for i := 0; i < len(BusIDList); i++ {
+		gpuManager.GPUBusIDList <- BusIDList[i]
+	}
+}
+
+func (gpuManager *GPUResourceManager) GetGPU() (string, error) {
+	select {
+	case busID := <-gpuManager.GPUBusIDList:
+		return busID, nil
+	default:
+		return "", ErrorNoGPUAvaiable
+	}
+}
+
+func (gpuManager *GPUResourceManager) PutBackGPU(BusID string) error {
+	select {
+	case gpuManager.GPUBusIDList <- BusID:
+		return nil
+	default:
+		return ErrorGPUPoolBlocked
+	}
+}
+
 func (sb *Sealer) SealPreCommit2(ctx context.Context, sector storage.SectorRef, phase1Out storage.PreCommit1Out) (storage.SectorCids, error) {
 	paths, done, err := sb.sectors.AcquireSector(ctx, sector, storiface.FTSealed|storiface.FTCache, 0, storiface.PathSealing)
 	if err != nil {
@@ -525,10 +567,29 @@ func (sb *Sealer) SealPreCommit2(ctx context.Context, sector storage.SectorRef, 
 	}
 	defer done()
 
+	/*****************************/
+	// 开始执行PC2之前获取GPU BUS ID
+	var gpuBusID string
+	var gpuBusErr error
+	gpuBusID, gpuBusErr = GPUManager.GetGPU()
+	if gpuBusErr != nil {
+		gpuBusID = "1"
+	}
+	os.Setenv("NEPTUNE_DEFAULT_GPU", fmt.Sprintf("%s", gpuBusID))
+	/*****************************/
+
 	sealedCID, unsealedCID, err := ffi.SealPreCommitPhase2(phase1Out, paths.Cache, paths.Sealed)
 	if err != nil {
 		return storage.SectorCids{}, xerrors.Errorf("presealing sector %d (%s): %w", sector.ID.Number, paths.Unsealed, err)
 	}
+
+	/*****************************/
+	// 执行PC2完毕后归还之前获取的GPU BUS ID
+	/*****************************/
+	if gpuBusErr != nil {
+		GPUManager.PutBackGPU(gpuBusID)
+	}
+	/*****************************/
 
 	return storage.SectorCids{
 		Unsealed: unsealedCID,

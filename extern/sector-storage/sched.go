@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"golang.org/x/xerrors"
 	"math/rand"
-	"os"
 	"sort"
 	"sync"
 	"time"
@@ -207,43 +206,10 @@ var taskTypeList []sealtasks.TaskType = []sealtasks.TaskType{
 	sealtasks.TTUnseal,
 }
 
-var ErrorNoGPUAvaiable = errors.New("Can not find any avaiable GPU.")
-var ErrorGPUPoolBlocked = errors.New("Can not put busid back.")
-
-type GPUResourceManager struct {
-	GPUBusIDList chan string
-}
-
-func (gpuManager *GPUResourceManager) GPUResInit(BusIDList ...string) {
-	gpuManager.GPUBusIDList = make(chan string, len(BusIDList))
-	for i := 0; i < len(BusIDList); i++ {
-		gpuManager.GPUBusIDList <- BusIDList[i]
-	}
-}
-
-func (gpuManager *GPUResourceManager) GetGPU() (string, error) {
-	select {
-	case busID := <-gpuManager.GPUBusIDList:
-		return busID, nil
-	default:
-		return "", ErrorNoGPUAvaiable
-	}
-}
-
-func (gpuManager *GPUResourceManager) PutBackGPU(BusID string) error {
-	select {
-	case gpuManager.GPUBusIDList <- BusID:
-		return nil
-	default:
-		return ErrorGPUPoolBlocked
-	}
-}
-
 // 定义worker的任务相关属性
 type WorkerTaskSpecs struct {
 	ID              WorkerID
 	Hostname        string
-	GPUManager      GPUResourceManager
 	CurrentAP       int
 	MaxAP           int
 	CurrentPC1      int
@@ -299,10 +265,6 @@ func NewWorkerTaskSpeec(sh *scheduler, hostname string, maxAP, maxPC1, maxPC2, m
 	go workerSpece.runWorkerTaskLoop()
 
 	return &workerSpece
-}
-
-func (workerSpec *WorkerTaskSpecs) InitGPURes(GPUBusID ...string) {
-	workerSpec.GPUManager.GPUResInit(GPUBusID...)
 }
 
 func (workerSpec *WorkerTaskSpecs) GetPendingList() []storiface.WorkerJob {
@@ -585,21 +547,6 @@ Run:
 	log.Debugf("^^^^^^^^ Worker:[%v] -> runTask(): 任务: [%v] 已经调度到 Worker [%v]上执行。\n",
 		workerSpec.Hostname, DumpRequest(request), Worker.info.Hostname)
 
-	// 如果是PC2任务，就使用指定的GPU.
-	var gpuBusID string
-	var err error
-	if request.TaskType == sealtasks.TTPreCommit2 {
-		gpuBusID, err = workerSpec.GPUManager.GetGPU()
-		if err != nil {
-			log.Errorf("^^^^^^^^ 任务：[%v] Worker:[%v] -> runTask()：获取GPU BusID错误: [%v]\n",
-				DumpRequest(request), workerSpec.Hostname, err)
-		} else {
-			os.Setenv("NEPTUNE_DEFAULT_GPU", fmt.Sprintf("%d", gpuBusID))
-			log.Debugf("^^^^^^^ 任务：[%v] Worker:[%v] -> runTask()：使用了GPU: [%s]\n",
-				DumpRequest(request), workerSpec.Hostname, gpuBusID)
-		}
-	}
-
 	workFunc := func(ret chan workerResponse) {
 		// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! //
 		if request.TaskType == sealtasks.TTAddPiece {
@@ -617,13 +564,6 @@ Run:
 		if err != nil {
 			log.Errorf("^^^^^^^^ 任务：[%v] Worker:[%v] -> runTask() Work 函数执行失败 [%v]\n",
 				DumpRequest(request), workerSpec.Hostname, err)
-		}
-
-		// 任务完成后，如果使用过GPU，就放回去。
-		if len(gpuBusID) > 0 {
-			workerSpec.GPUManager.PutBackGPU(gpuBusID)
-			log.Debugf("^^^^^^^^ 任务：[%v] Worker:[%v] -> runTask() GPU使用完毕 [%d]，返回到池中。",
-				DumpRequest(request), workerSpec.Hostname, gpuBusID)
 		}
 
 		// 任务完成后，计数器减一
@@ -853,17 +793,11 @@ func InitWorerList(scheduler *scheduler) {
 	node1 := NewWorkerTaskSpeec(scheduler, "miner-node-1", 0, 0, 0, 0,
 		0, 2, 2)
 
-	node1.InitGPURes("1", "33")
-
 	node2 := NewWorkerTaskSpeec(scheduler, "worker-node-1", 1, 4, 2, 2,
 		2, 2, 2)
 
-	node2.InitGPURes("1", "33")
-
 	node3 := NewWorkerTaskSpeec(scheduler, "worker-node-2", 0, 4, 2, 2,
 		2, 2, 2)
-
-	node3.InitGPURes("1", "33")
 
 	lotusSealingWorkers.WorkerList[node1.Hostname] = node1
 	lotusSealingWorkers.WorkerList[node2.Hostname] = node2
