@@ -522,6 +522,7 @@ func (sb *Sealer) SealPreCommit1(ctx context.Context, sector storage.SectorRef, 
 
 func init() {
 	// 初始化GPU BUS ID
+	log.Debugf("^^^^^^^^ Sealer: 初始化显卡BusID.\n")
 	GPUManager.GPUResInit("1", "33")
 }
 
@@ -545,8 +546,10 @@ func (gpuManager *GPUResourceManager) GPUResInit(BusIDList ...string) {
 func (gpuManager *GPUResourceManager) GetGPU() (string, error) {
 	select {
 	case busID := <-gpuManager.GPUBusIDList:
+		log.Debugf("^^^^^^^^ Sealer: GetGPU() -> 获取显卡BusID: [%s].\n", busID)
 		return busID, nil
 	default:
+		log.Errorf("^^^^^^^^ Sealer: GetGPU() -> 无法获取到显卡BusID.\n")
 		return "", ErrorNoGPUAvaiable
 	}
 }
@@ -554,8 +557,10 @@ func (gpuManager *GPUResourceManager) GetGPU() (string, error) {
 func (gpuManager *GPUResourceManager) PutBackGPU(BusID string) error {
 	select {
 	case gpuManager.GPUBusIDList <- BusID:
+		log.Errorf("^^^^^^^^ Sealer: PutBackGPU() -> 归还显卡BusID: [%s]\n", BusID)
 		return nil
 	default:
+		log.Errorf("^^^^^^^^ Sealer: PutBackGPU() -> 无法归还显卡BusID: [%s]\n", BusID)
 		return ErrorGPUPoolBlocked
 	}
 }
@@ -575,18 +580,24 @@ func (sb *Sealer) SealPreCommit2(ctx context.Context, sector storage.SectorRef, 
 	if gpuBusErr != nil {
 		gpuBusID = "1"
 	}
+	log.Debugf("^^^^^^^^ Sealer: SealPreCommit2() -> 获取显卡BusID: [%s].\n", gpuBusID)
 	os.Setenv("NEPTUNE_DEFAULT_GPU", fmt.Sprintf("%s", gpuBusID))
 	/*****************************/
 
 	sealedCID, unsealedCID, err := ffi.SealPreCommitPhase2(phase1Out, paths.Cache, paths.Sealed)
 	if err != nil {
+		if gpuBusErr == nil {
+			log.Debugf("^^^^^^^^ Sealer: SealPreCommit2() -> 使用完毕，归还显卡BusID: [%s].\n", gpuBusID)
+			GPUManager.PutBackGPU(gpuBusID)
+		}
 		return storage.SectorCids{}, xerrors.Errorf("presealing sector %d (%s): %w", sector.ID.Number, paths.Unsealed, err)
 	}
 
 	/*****************************/
 	// 执行PC2完毕后归还之前获取的GPU BUS ID
 	/*****************************/
-	if gpuBusErr != nil {
+	if gpuBusErr == nil {
+		log.Debugf("^^^^^^^^ Sealer: SealPreCommit2() -> 使用完毕，归还显卡BusID: [%s].\n", gpuBusID)
 		GPUManager.PutBackGPU(gpuBusID)
 	}
 	/*****************************/
