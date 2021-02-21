@@ -889,6 +889,7 @@ func (sh *scheduler) doSched() {
 	hasSetWorkerID := 0
 
 	for {
+	START:
 
 		var workeRequest *SectorRequest
 		select {
@@ -1055,8 +1056,13 @@ func (sh *scheduler) doSched() {
 					// 这里的过滤规则，可以在执行某些类型的任务时，选找到包含有该扇区的worker.
 					bestWorkerName, err = lotusSealingWorkers.GetMinTaskWorker(workeRequest, invalidWorkerList)
 					if err == ErrorNoAvaiableWorker {
-						log.Errorf("^^^^^^^^ doSched() -> 任务 [%v] 无法找到合适的worker\n",
+						log.Errorf("^^^^^^^^ doSched() -> 任务 [%v] 无法找到合适的worker，调度器返回错误.\n",
 							DumpRequest(workeRequest))
+						// 找不到任何worker，说明这个扇区任务之前运行的节点已经移除。
+						// 应该发送报错。
+						workeRequest.RetChan <- workerResponse{err: err}
+						lotusSealingWorkers.Locker.Unlock()
+						goto START
 					}
 
 					log.Infof("^^^^^^^^ doSched() -> 任务 [%v] 从未在任何Worker上运行过，选择任务数最小的Worker [%v] 运行.\n",
