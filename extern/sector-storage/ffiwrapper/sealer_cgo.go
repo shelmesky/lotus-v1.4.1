@@ -555,6 +555,11 @@ func (gpuManager *GPUResourceManager) GetGPU() (string, error) {
 }
 
 func (gpuManager *GPUResourceManager) PutBackGPU(BusID string) error {
+	// 如果channel中已有
+	if len(gpuManager.GPUBusIDList) == 2 {
+		return nil
+	}
+
 	select {
 	case gpuManager.GPUBusIDList <- BusID:
 		log.Errorf("^^^^^^^^ Sealer: PutBackGPU() -> 归还显卡BusID: [%s]\n", BusID)
@@ -576,19 +581,30 @@ func (sb *Sealer) SealPreCommit2(ctx context.Context, sector storage.SectorRef, 
 	// 开始执行PC2之前获取GPU BUS ID
 	var gpuBusID string
 	var gpuBusErr error
+	var gpuHasReturn bool
 	gpuBusID, gpuBusErr = GPUManager.GetGPU()
 	if gpuBusErr != nil {
 		gpuBusID = "1"
 	}
 	log.Debugf("^^^^^^^^ Sealer: SealPreCommit2() -> 获取显卡BusID: [%s].\n", gpuBusID)
 	os.Setenv("NEPTUNE_DEFAULT_GPU", fmt.Sprintf("%s", gpuBusID))
+
+	defer func() {
+		if gpuBusErr == nil && gpuHasReturn == false {
+			log.Debugf("^^^^^^^^ Sealer: SealPreCommit2() -> Defer -> 使用完毕，归还显卡BusID: [%s].\n", gpuBusID)
+			GPUManager.PutBackGPU(gpuBusID)
+			gpuHasReturn = true
+		}
+	}()
+
 	/*****************************/
 
 	sealedCID, unsealedCID, err := ffi.SealPreCommitPhase2(phase1Out, paths.Cache, paths.Sealed)
 	if err != nil {
-		if gpuBusErr == nil {
+		if gpuBusErr == nil && gpuHasReturn == false {
 			log.Debugf("^^^^^^^^ Sealer: SealPreCommit2() -> 使用完毕，归还显卡BusID: [%s].\n", gpuBusID)
 			GPUManager.PutBackGPU(gpuBusID)
+			gpuHasReturn = true
 		}
 		return storage.SectorCids{}, xerrors.Errorf("presealing sector %d (%s): %w", sector.ID.Number, paths.Unsealed, err)
 	}
@@ -596,9 +612,10 @@ func (sb *Sealer) SealPreCommit2(ctx context.Context, sector storage.SectorRef, 
 	/*****************************/
 	// 执行PC2完毕后归还之前获取的GPU BUS ID
 	/*****************************/
-	if gpuBusErr == nil {
+	if gpuBusErr == nil && gpuHasReturn == false {
 		log.Debugf("^^^^^^^^ Sealer: SealPreCommit2() -> 使用完毕，归还显卡BusID: [%s].\n", gpuBusID)
 		GPUManager.PutBackGPU(gpuBusID)
+		gpuHasReturn = true
 	}
 	/*****************************/
 
