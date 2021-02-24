@@ -208,22 +208,37 @@ var taskTypeList []sealtasks.TaskType = []sealtasks.TaskType{
 
 // 定义worker的任务相关属性
 type WorkerTaskSpecs struct {
-	ID              WorkerID
-	Hostname        string
-	CurrentAP       int
-	MaxAP           int
-	CurrentPC1      int
-	MaxPC1          int
-	CurrentPC2      int
-	MaxPC2          int
-	CurrentC1       int
-	MaxC1           int
-	CurrentC2       int
-	MaxC2           int
+	ID       WorkerID
+	Hostname string
+
+	CurrentAP int
+	MaxAP     int
+	DisableAP bool
+
+	CurrentPC1 int
+	MaxPC1     int
+	DisablePC1 bool
+
+	CurrentPC2 int
+	MaxPC2     int
+	DisablePC2 bool
+
+	CurrentC1 int
+	MaxC1     int
+	DisableC1 bool
+
+	CurrentC2 int
+	MaxC2     int
+	DisableC2 bool
+
 	CurrentFinalize int
 	MaxFinalize     int
-	CurrentFetch    int
-	MaxFetch        int
+	DisableFinalize bool
+
+	CurrentFetch int
+	MaxFetch     int
+	DisableFetch bool
+
 	RequestSignal   chan *SectorRequest                        // 接收任务的队列
 	RequestQueueMap map[sealtasks.TaskType]chan *SectorRequest // 每种任务类型对应的队列
 	PendingList     *list.List                                 // 收集无法执行的任务，保存到这个队列
@@ -295,21 +310,21 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 	log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始运行...", workerSpec.Hostname)
 	for {
 
+		// 如果节点是miner，每天晚上的21点停止接受PC2、C1、C2任务，凌晨4点再开始接受。
 		if workerSpec.Hostname == "miner-node-1" {
 			if time.Now().Hour() == 21 {
-				workerSpec.MaxPC2 = 0
-				workerSpec.MaxC1 = 0
-				workerSpec.MaxC2 = 0
-				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 停止 接受PC2、C1、C2任务!",
+				workerSpec.DisablePC2 = true
+				workerSpec.DisableC1 = true
+				workerSpec.DisableC2 = true
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 停止 接受PC2、C1、C2任务!!!.\n",
 					workerSpec.Hostname)
 			}
 
 			if time.Now().Hour() == 4 {
-				workerSpec.MaxPC2 = 2
-				workerSpec.MaxC1 = 2
-				workerSpec.MaxC2 = 2
-
-				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始 接受PC2、C1、C2任务!",
+				workerSpec.DisablePC2 = false
+				workerSpec.DisableC1 = false
+				workerSpec.DisableC2 = false
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始 接受PC2、C1、C2任务!!!.\n",
 					workerSpec.Hostname)
 			}
 		}
@@ -704,11 +719,17 @@ func (workers *SealingWorkers) GetWorkerList(request *SectorRequest, filterList 
 			if v.MaxAP == 0 {
 				continue
 			}
+			if v.DisableAP {
+				continue
+			}
 		case sealtasks.TTPreCommit1:
 			if checkFilterFunc(v.Hostname) {
 				continue
 			}
 			if v.MaxPC1 == 0 {
+				continue
+			}
+			if v.DisablePC1 {
 				continue
 			}
 		case sealtasks.TTPreCommit2:
@@ -718,11 +739,17 @@ func (workers *SealingWorkers) GetWorkerList(request *SectorRequest, filterList 
 			if v.MaxPC2 == 0 {
 				continue
 			}
+			if v.DisablePC2 {
+				continue
+			}
 		case sealtasks.TTCommit1:
 			if checkFilterFunc(v.Hostname) {
 				continue
 			}
 			if v.MaxC1 == 0 {
+				continue
+			}
+			if v.DisableC1 {
 				continue
 			}
 		case sealtasks.TTCommit2:
@@ -732,6 +759,9 @@ func (workers *SealingWorkers) GetWorkerList(request *SectorRequest, filterList 
 			if v.MaxC2 == 0 {
 				continue
 			}
+			if v.DisableC2 {
+				continue
+			}
 		case sealtasks.TTFinalize:
 			if checkFilterFunc(v.Hostname) {
 				continue
@@ -739,11 +769,17 @@ func (workers *SealingWorkers) GetWorkerList(request *SectorRequest, filterList 
 			if v.MaxFinalize == 0 {
 				continue
 			}
+			if v.DisableFinalize {
+				continue
+			}
 		case sealtasks.TTFetch:
 			if checkFilterFunc(v.Hostname) {
 				continue
 			}
 			if v.MaxFetch == 0 {
+				continue
+			}
+			if v.DisableFetch {
 				continue
 			}
 		}
@@ -1017,7 +1053,7 @@ func (sh *scheduler) doSched() {
 						DumpRequest(workeRequest), bestWorkerName)
 
 				} else {
-					// 如果任务是PC1，并且该worker上的任务数量已满，就寻找一个未满的worker.
+					// 如果任务是PC1，或者该worker上的任务数量已满，就寻找一个未满的worker.
 					// 如果未找到，就寻找所有worker中数量最小的那个.
 
 					workerList := lotusSealingWorkers.GetWorkerList(workeRequest, []string{})
