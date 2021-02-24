@@ -295,6 +295,25 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 	log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始运行...", workerSpec.Hostname)
 	for {
 
+		if workerSpec.Hostname == "miner-node-1" {
+			if time.Now().Hour() == 21 {
+				workerSpec.MaxPC2 = 0
+				workerSpec.MaxC1 = 0
+				workerSpec.MaxC2 = 0
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 停止 接受PC2、C1、C2任务!",
+					workerSpec.Hostname)
+			}
+
+			if time.Now().Hour() == 4 {
+				workerSpec.MaxPC2 = 2
+				workerSpec.MaxC1 = 2
+				workerSpec.MaxC2 = 2
+
+				log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 开始 接受PC2、C1、C2任务!",
+					workerSpec.Hostname)
+			}
+		}
+
 		if !startDoSchedule {
 			log.Debugf("^^^^^^^^ runWorkerTaskLoop() Worker [%v] 等待调度器开始运行.\n", workerSpec.Hostname)
 			time.Sleep(5 * time.Second)
@@ -790,8 +809,8 @@ func InitWorerList(scheduler *scheduler) {
 
 	lotusSealingWorkers.WorkerList = make(map[string]*WorkerTaskSpecs, 512)
 
-	node1 := NewWorkerTaskSpeec(scheduler, "miner-node-1", 0, 0, 0, 0,
-		0, 2, 2)
+	node1 := NewWorkerTaskSpeec(scheduler, "miner-node-1", 0, 0, 2, 2,
+		2, 2, 2)
 
 	//node2 := NewWorkerTaskSpeec(scheduler, "worker-node-1", 1, 4, 2, 2,
 	//2, 2, 2)
