@@ -425,7 +425,7 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 				executedReqList = append(executedReqList, req)
 			}
 		} else {
-			log.Warnf("^^^^^^^^ !!! Worker:[%v] Commit2 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] Commit2 达到最大数量，或者目前有正在运行的 PreCommit2 任务: [Currnet: %v -> Max: %v] !!!\n",
 				workerSpec.Hostname, workerSpec.CurrentC2, workerSpec.MaxC2)
 		}
 
@@ -458,7 +458,7 @@ func (workerSpec *WorkerTaskSpecs) runWorkerTaskLoop() {
 				executedReqList = append(executedReqList, req)
 			}
 		} else {
-			log.Warnf("^^^^^^^^ !!! Worker:[%v] PreCommit2 达到最大数量: [Currnet: %v -> Max: %v] !!!\n",
+			log.Warnf("^^^^^^^^ !!! Worker:[%v] PreCommit2 达到最大数量，或者目前有正在运行的 Commit2 任务: [Currnet: %v -> Max: %v] !!!\n",
 				workerSpec.Hostname, workerSpec.CurrentPC2, workerSpec.MaxPC2)
 		}
 
